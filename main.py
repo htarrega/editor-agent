@@ -1,8 +1,9 @@
 import os
-from openai import OpenAI
 import json
 
+from openai import OpenAI
 from tools import ALL_TOOLS
+
 
 MODEL = "deepseek-v4-flash"
 RESPONSE_MAX_TOKENS = 32768
