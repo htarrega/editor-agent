@@ -17,5 +17,6 @@ export DEEPSEEK_API_KEY=...      # cheap baseline
 export ANTHROPIC_API_KEY=...     # strong-model baseline
 
 python -m evals.run              # metrics table + cost of the run
+python -m evals.run --reuse      # ...reusing cached baselines, calling only what is new
 python -m unittest discover -s evals/tests -t .
 ```

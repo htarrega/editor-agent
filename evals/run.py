@@ -15,7 +15,7 @@ from collections import Counter
 from pydantic import BaseModel
 
 from corrector.edits import apply_edits
-from evals import corruptor, metrics, systems
+from evals import corruptor, metrics, reuse, systems
 from evals.dataset import load_fragments
 
 RESULTS_DIR = pathlib.Path(__file__).parent / "results"
@@ -41,21 +41,35 @@ def main(argv=None):
     fragments = load_fragments(limit_words=args.limit_words, only=args.fragments)
     cases = build_cases(fragments, args)
 
-    print(header(fragments, cases, args))
-
     report = {
         "config": vars(args) | {"fragments": [f.name for f in fragments]},
         "corpus": summarise_corpus(cases),
         "systems": {},
     }
 
+    # Nothing about a baseline changes between runs, and one of them costs
+    # $1.32: with --reuse only the system under development is actually called.
+    cached, notes = {}, []
+    if args.reuse:
+        cached, notes = reuse.load(
+            args.reuse, args.systems, report["config"], report["corpus"], args.out
+        )
+
+    print(header(fragments, cases, args, notes))
+
+    # Unknown names fail here rather than after ten minutes of paid baseline.
+    live = {s.name: s for s in systems.build([n for n in args.systems if n not in cached])}
+
     # The naive baselines take minutes per call, so the report is rewritten
     # after every system: an interrupted run still keeps what it measured.
     path = report_path(args.out, args.tag)
-    for system in systems.build(args.systems):
-        result = evaluate(system, fragments, cases, skip_clean=args.skip_clean)
-        report["systems"][system.name] = result
-        print(summary_row(system.name, result))
+    for name in args.systems:
+        if name in cached:
+            result = cached[name]
+        else:
+            result = evaluate(live[name], fragments, cases, skip_clean=args.skip_clean)
+        report["systems"][name] = result
+        print(summary_row(name, result))
         write_report(report, path)
 
     print()
@@ -82,6 +96,16 @@ def parse_args(argv):
     parser.add_argument("--out", type=pathlib.Path, default=RESULTS_DIR)
     parser.add_argument("--tag", default="", help="suffix for the report filename")
     parser.add_argument("--skip-clean", action="store_true", help="skip corpus B")
+    parser.add_argument(
+        "--reuse",
+        nargs="?",
+        const="latest",
+        default=None,
+        metavar="INFORME",
+        help="read each system's numbers from an earlier report instead of running it; "
+        "bare flag scans --out newest first, or name one report. Reports built from a "
+        "different corpus are skipped, never mixed in",
+    )
     return parser.parse_args(argv)
 
 
@@ -192,7 +216,7 @@ SUMMARY_HEADER = (
 )
 
 
-def header(fragments, cases, args):
+def header(fragments, cases, args, notes=()):
     seeded = sum(len(c.gold) for c in cases)
     words = sum(f.words for f in fragments)
     lines = [
@@ -200,6 +224,7 @@ def header(fragments, cases, args):
         f"corpus A: {len(cases)} versiones corrompidas, {seeded} errores sembrados "
         f"(rate={args.rate}, seed={args.seed}, repeats={args.repeats})",
         f"corpus B: {len(fragments)} fragmentos intactos, {words} palabras",
+        *notes,
         "",
         SUMMARY_HEADER,
         "-" * len(SUMMARY_HEADER),
@@ -212,10 +237,13 @@ def summary_row(name, result):
     # A run with failed calls is not comparable to a complete one; say so on
     # the row itself rather than only in the detail below.
     warning = f"  ⚠ {len(result['errors'])} llamadas fallidas" if result["errors"] else ""
+    # Cost and seconds of a reused row were paid by an earlier run; the row says
+    # so, because otherwise this run looks like it spent them.
+    cache = "  ↺ caché" if result.get("reused_from") else ""
     return (
         f"{name:<16} {o['precision']:>6.3f} {o['recall']:>6.3f} {o['f05']:>6.3f} "
         f"{c['fp_per_1k']:>7.2f} {c['voice']:>6.3f} {u['cost_usd']:>8.4f} {u['seconds']:>6.1f}"
-        f"{warning}"
+        f"{cache}{warning}"
     )
 
 
@@ -250,7 +278,13 @@ def summarise_corpus(cases):
     for case in cases:
         for kind, n in case.counts_by_kind().items():
             counts[kind] = counts.get(kind, 0) + n
-    return {"cases": len(cases), "seeded_by_kind": dict(sorted(counts.items()))}
+    return {
+        "cases": len(cases),
+        # Identifies the corpus a later run would have to match to reuse these
+        # numbers; the config alone does not (see reuse.fingerprint).
+        "fingerprint": reuse.fingerprint(cases),
+        "seeded_by_kind": dict(sorted(counts.items())),
+    }
 
 
 def report_path(out_dir, tag):
