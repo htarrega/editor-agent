@@ -103,6 +103,12 @@ Key points:
 - **The model never rewrites text.** It emits anchored edits (like a `search/replace`); the
   application is deterministic code. If an anchor does not match, the edit is discarded and
   logged. This removes the risk of silent rewrites.
+- **The anchor is scoped to a line.** The text goes to the model with its lines numbered, and
+  an edit names the line it belongs to. Without it the anchor has to be unique across the
+  whole manuscript, which forces the model to quote a clause where a word would do —
+  precisely on orthotypography (a dash, a quote mark, a comma), which is the one category
+  where the baselines already fail. The line is a hint, not a claim: an anchor that is unique
+  in the whole text resolves whatever line the model thought it was on.
 - **Autonomous but auditable**: the agent iterates on its own (correct → verify → apply),
   and the only output towards the writer is the corrected document + the corrections report.
   It asks no questions unless genuinely blocked (e.g. an ambiguous proper name).

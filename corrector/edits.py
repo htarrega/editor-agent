@@ -18,6 +18,9 @@ class ProposedEdit(BaseModel):
 
     original: str = Field(description="Exact text to replace; must appear exactly once")
     replacement: str = Field(description="Text to put in its place")
+    line: int | None = Field(
+        default=None, description="1-based line the anchor is in; narrows an ambiguous anchor"
+    )
     kind: str = Field(default="otro", description="Error type from the taxonomy")
     rule: str = Field(default="", description="Rule or norm that justifies the edit")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -42,15 +45,33 @@ class Rejection(BaseModel):
     detail: str
 
 
+def line_spans(text):
+    """``(start, end)`` of every line, in order. Line *n* is ``spans[n - 1]``.
+
+    The one place line numbers are derived from, so what a prompt numbers and
+    what an anchor resolves against cannot drift apart.
+    """
+    spans, start = [], 0
+    for line in text.split("\n"):
+        spans.append((start, start + len(line)))
+        start += len(line) + 1
+    return spans
+
+
 def resolve_edits(text, proposals):
     """Turn anchored proposals into offset edits.
 
     An anchor that is missing or appears more than once is ambiguous, so the
-    edit is dropped rather than guessed at.
+    edit is dropped rather than guessed at. A ``line`` narrows the search
+    first: «vaso» is ambiguous in a chapter and unique in its paragraph. The
+    line is only a hint, never a claim to verify — an anchor that is unique in
+    the whole text is unambiguous whatever line the model thought it was on,
+    so a miss inside the line falls back to the text-wide search.
     """
     edits, rejected = [], []
+    spans = line_spans(text)
     for proposal in proposals:
-        hits = _find_all(text, proposal.original)
+        hits = _within_line(text, proposal, spans) or _find_all(text, proposal.original)
         if not hits:
             rejected.append(Rejection(reason="anchor_not_found", detail=proposal.original))
             continue
@@ -137,6 +158,15 @@ def _trim(text, start, end, replacement):
 
 def _tokens(text):
     return [(m.group(), m.start(), m.end()) for m in TOKEN.finditer(text)]
+
+
+def _within_line(text, proposal, spans):
+    """The anchor's occurrences inside the line it claims, if that is exactly one."""
+    if proposal.line is None or not 1 <= proposal.line <= len(spans):
+        return []
+    start, end = spans[proposal.line - 1]
+    hits = [start + offset for offset in _find_all(text[start:end], proposal.original)]
+    return hits if len(hits) == 1 else []
 
 
 def _find_all(text, needle):

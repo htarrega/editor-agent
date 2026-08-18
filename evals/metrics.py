@@ -15,7 +15,7 @@ it means a chatty system is penalised twice over.
 import re
 from collections import Counter
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 from corrector.taxonomy import ERROR_TYPES
 
@@ -77,6 +77,24 @@ class Tally(BaseModel):
         self.n_pred += other.n_pred
 
 
+class Outcome(BaseModel):
+    """One gold or predicted edit, and whether the other side agreed with it.
+
+    The per-type tallies say how much a system missed; these say *which* edits
+    and *where*, which is what a failure-driven rule pack (H4) is written from.
+    ``kind`` is the raw label, not the normalised one: an off-taxonomy label is
+    itself a signal about the edit.
+    """
+
+    side: str
+    hit: bool
+    kind: str
+    rule: str = ""
+    before: str
+    after: str
+    at: float = Field(ge=0.0, le=1.0, description="Relative position in the text, 0 = start")
+
+
 class Score(BaseModel):
     overall: Tally = Tally()
     by_kind: dict[str, Tally] = {}
@@ -90,6 +108,48 @@ class Score(BaseModel):
             self.tally(kind).add(tally)
 
 
+def agreements(text, gold, predicted):
+    """Clusters where the gold edits and the predicted ones produce the same text.
+
+    Yields ``(golds, preds)``, each a list of ``(index, edit)``. The single
+    place the cluster matching lives, so the tallies and the per-edit record
+    can never disagree about what counted as a hit.
+    """
+    for cluster in _clusters(gold, predicted):
+        golds = [(i, e) for source, i, e in cluster if source == "gold"]
+        preds = [(i, e) for source, i, e in cluster if source == "pred"]
+        if not golds or not preds:
+            continue
+        if not _agree(text, cluster, [e for _, e in golds], [e for _, e in preds]):
+            continue
+        yield golds, preds
+
+
+def outcomes(text, gold, predicted, cap=80):
+    """Every edit on both sides, marked hit or miss, with where it sits."""
+    hit_gold, hit_pred = set(), set()
+    for golds, preds in agreements(text, gold, predicted):
+        hit_gold.update(i for i, _ in golds)
+        hit_pred.update(i for i, _ in preds)
+
+    span = max(len(text), 1)
+    records = []
+    for side, edits, hits in (("gold", gold, hit_gold), ("pred", predicted, hit_pred)):
+        for index, edit in enumerate(edits):
+            records.append(
+                Outcome(
+                    side=side,
+                    hit=index in hits,
+                    kind=edit.kind,
+                    rule=edit.rule,
+                    before=edit.before(text)[:cap],
+                    after=edit.replacement[:cap],
+                    at=min(edit.start / span, 1.0),
+                )
+            )
+    return records
+
+
 def score(text, gold, predicted):
     """Compare predicted edits against gold edits on the corrupted text."""
     result = Score()
@@ -100,19 +160,15 @@ def score(text, gold, predicted):
     for edit in predicted:
         result.tally(_normalise_kind(edit.kind)).n_pred += 1
 
-    for cluster in _clusters(gold, predicted):
-        golds = [e for source, e in cluster if source == "gold"]
-        preds = [e for source, e in cluster if source == "pred"]
-        if not golds or not preds or not _agree(text, cluster, golds, preds):
-            continue
+    for golds, preds in agreements(text, gold, predicted):
         result.overall.tp_gold += len(golds)
         result.overall.tp_pred += len(preds)
-        for edit in golds:
+        for _, edit in golds:
             result.tally(edit.kind).tp_gold += 1
         # Attribute the predicted hit to the gold type, so per-type precision
         # stays meaningful for systems that do not use our taxonomy.
-        target = golds[0].kind
-        for edit in preds:
+        target = golds[0][1].kind
+        for _, edit in preds:
             result.tally(_normalise_kind(edit.kind)).n_pred -= 1
             result.tally(target).n_pred += 1
             result.tally(target).tp_pred += 1
@@ -171,15 +227,21 @@ def _mattr(words, window=100):
 
 
 def _clusters(gold, predicted):
-    items = [("gold", e) for e in gold] + [("pred", e) for e in predicted]
-    items.sort(key=lambda item: (item[1].start, item[1].end))
+    """Groups of edits that touch, as ``(side, index, edit)``.
+
+    The index rides along so a caller can say which edit was matched, not only
+    how many.
+    """
+    items = [("gold", i, e) for i, e in enumerate(gold)]
+    items += [("pred", i, e) for i, e in enumerate(predicted)]
+    items.sort(key=lambda item: (item[2].start, item[2].end))
 
     clusters, current, reach = [], [], None
-    for source, edit in items:
+    for source, index, edit in items:
         if current and edit.start > reach:
             clusters.append(current)
             current, reach = [], None
-        current.append((source, edit))
+        current.append((source, index, edit))
         reach = edit.end if reach is None else max(reach, edit.end)
     if current:
         clusters.append(current)
@@ -187,8 +249,8 @@ def _clusters(gold, predicted):
 
 
 def _agree(text, cluster, golds, preds):
-    lo = min(e.start for _, e in cluster)
-    hi = max(e.end for _, e in cluster)
+    lo = min(e.start for _, _, e in cluster)
+    hi = max(e.end for _, _, e in cluster)
     rendered_gold = _render(text, lo, hi, golds)
     rendered_pred = _render(text, lo, hi, preds)
     return rendered_gold is not None and rendered_gold == rendered_pred

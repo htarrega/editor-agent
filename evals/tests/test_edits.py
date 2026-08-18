@@ -5,6 +5,7 @@ from corrector.edits import (
     ProposedEdit,
     apply_edits,
     diff_edits,
+    line_spans,
     resolve_edits,
     trim,
 )
@@ -58,6 +59,52 @@ class ResolveEdits(unittest.TestCase):
         )
         self.assertEqual(edits, [])
         self.assertEqual(rejected[0].reason, "anchor_ambiguous")
+
+
+class LineScopedAnchors(unittest.TestCase):
+    """A word is ambiguous in a chapter and unique in its paragraph. The line
+    is what makes an anchor short enough to be worth emitting."""
+
+    TEXT = "el vasu de sidra\nel vasu de agua\n"
+
+    def test_line_picks_between_repeated_anchors(self):
+        edits, rejected = resolve_edits(
+            self.TEXT, [ProposedEdit(original="vasu", replacement="vaso", line=2)]
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(edits[0].start, self.TEXT.index("\n") + 4)
+
+    def test_a_wrong_line_still_resolves_a_unique_anchor(self):
+        # The line is a hint, not a claim: unique in the text is unambiguous
+        # whatever line the model thought it was on.
+        edits, rejected = resolve_edits(
+            "el vasu de sidra\nel vaso de agua\n",
+            [ProposedEdit(original="vasu", replacement="vaso", line=2)],
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(edits[0].start, 3)
+
+    def test_out_of_range_line_falls_back_to_the_text(self):
+        edits, _ = resolve_edits(
+            "el vasu\n", [ProposedEdit(original="vasu", replacement="vaso", line=99)]
+        )
+        self.assertEqual(edits[0].start, 3)
+
+    def test_repeated_within_the_named_line_is_still_ambiguous(self):
+        edits, rejected = resolve_edits(
+            "vasu y vasu\n", [ProposedEdit(original="vasu", replacement="vaso", line=1)]
+        )
+        self.assertEqual(edits, [])
+        self.assertEqual(rejected[0].reason, "anchor_ambiguous")
+
+
+class LineSpans(unittest.TestCase):
+    def test_spans_slice_back_to_the_lines(self):
+        text = "una\n\ntres\n"
+        self.assertEqual([text[a:b] for a, b in line_spans(text)], ["una", "", "tres", ""])
+
+    def test_a_text_without_newlines_is_one_line(self):
+        self.assertEqual(line_spans("hola"), [(0, 4)])
 
 
 class DiffEdits(unittest.TestCase):

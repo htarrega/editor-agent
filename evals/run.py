@@ -15,6 +15,7 @@ from collections import Counter
 from pydantic import BaseModel
 
 from corrector.edits import apply_edits
+from corrector.taxonomy import ERROR_TYPES
 from evals import corruptor, metrics, reuse, systems
 from evals.dataset import load_fragments
 
@@ -51,9 +52,11 @@ def main(argv=None):
     # $1.32: with --reuse only the system under development is actually called.
     cached, notes = {}, []
     if args.reuse:
-        cached, notes = reuse.load(
-            args.reuse, args.systems, report["config"], report["corpus"], args.out
-        )
+        # The system under development is the one whose numbers change, and
+        # after its first run it also has a cache. Without --fresh a routine
+        # `--reuse` would quietly publish last run's numbers as this run's.
+        wanted = [name for name in args.systems if name not in args.fresh]
+        cached, notes = reuse.load(args.reuse, wanted, report["config"], report["corpus"], args.out)
 
     print(header(fragments, cases, args, notes))
 
@@ -97,6 +100,12 @@ def parse_args(argv):
     parser.add_argument("--tag", default="", help="suffix for the report filename")
     parser.add_argument("--skip-clean", action="store_true", help="skip corpus B")
     parser.add_argument(
+        "--fresh",
+        type=comma_list,
+        default=[],
+        help="systems that are always run live, never taken from the cache",
+    )
+    parser.add_argument(
         "--reuse",
         nargs="?",
         const="latest",
@@ -133,19 +142,27 @@ def evaluate(system, fragments, cases, skip_clean=False):
     usage = systems.Usage()
     score = metrics.Score()
     errors, skipped = [], 0
+    rejected = Counter()
+    detail = []
 
     for case in cases:
         out = system.correct(case.text)
         usage.add(out.usage)
         errors.extend(f"{case.name}: {e}" for e in out.errors)
         skipped += out.skipped
+        rejected.update(out.rejected)
         score.add(metrics.score(case.text, case.gold, out.edits))
+        detail.extend(
+            {"case": case.name} | outcome.model_dump()
+            for outcome in metrics.outcomes(case.text, case.gold, out.edits)
+        )
 
     clean = CleanResult()
     if not skip_clean:
-        clean, clean_usage, clean_errors = evaluate_clean(system, fragments)
+        clean, clean_usage, clean_errors, clean_rejected = evaluate_clean(system, fragments)
         usage.add(clean_usage)
         errors.extend(clean_errors)
+        rejected.update(clean_rejected)
 
     return {
         "overall": score.overall.model_dump(),
@@ -153,6 +170,15 @@ def evaluate(system, fragments, cases, skip_clean=False):
         "clean": clean.model_dump(),
         "usage": usage.model_dump(),
         "unactionable": skipped,
+        # Why a proposal never became an edit. ARCHITECTURE §4 requires the
+        # discards to be logged, not merely counted: a run where the anchors
+        # stop matching looks, from F0.5 alone, like a run that got worse.
+        "rejected": dict(sorted(rejected.items(), key=lambda kv: -kv[1])),
+        # Every corpus-A edit on both sides, hit or missed, with where it sits.
+        # The tallies say how much was missed; a rule pack is written from
+        # which ones, and the position is what separates "cannot see this
+        # error" from "stopped reading".
+        "edits": detail,
         "errors": errors,
         # Recorded so a past run says what it was compared against; changing a
         # baseline's prompt changes what its numbers mean.
@@ -162,16 +188,17 @@ def evaluate(system, fragments, cases, skip_clean=False):
 
 
 def evaluate_clean(system, fragments):
-    """Run the systems over untouched text. Returns the result, its cost and
-    its errors, so the caller decides what to do with each."""
+    """Run the systems over untouched text. Returns the result, its cost, its
+    errors and its discards, so the caller decides what to do with each."""
     usage, errors = systems.Usage(), []
     result = CleanResult()
-    distances, by_kind = [], Counter()
+    distances, by_kind, rejected = [], Counter(), Counter()
 
     for fragment in fragments:
         out = system.correct(fragment.text)
         usage.add(out.usage)
         errors.extend(f"{fragment.name} (limpio): {e}" for e in out.errors)
+        rejected.update(out.rejected)
 
         # A failed call produces no edits. Counting its words anyway would
         # silently halve the false-positive rate, so drop the fragment.
@@ -205,7 +232,7 @@ def evaluate_clean(system, fragments):
     result.by_kind = dict(sorted(by_kind.items(), key=lambda kv: -kv[1]))
     result.fp_per_1k = 1000 * result.fp / result.words if result.words else 0.0
     result.voice = sum(distances) / len(distances) if distances else 0.0
-    return result, usage, errors
+    return result, usage, errors, rejected
 
 
 # --- rendering --------------------------------------------------------------
@@ -266,11 +293,81 @@ def by_kind_table(name, result):
     if clean:
         top = ", ".join(f"{k}={v}" for k, v in list(clean.items())[:6])
         lines.append(f"  falsos positivos en texto limpio: {top}")
+    # Older reports predate both keys; a reused row must still render.
+    discarded = result.get("rejected") or {}
+    if discarded:
+        reasons = ", ".join(f"{k}={v}" for k, v in discarded.items())
+        lines.append(f"  propuestas descartadas: {reasons}")
+    for extra in (coverage_line(result.get("edits")), offschema_line(result.get("edits"))):
+        if extra:
+            lines.append(f"  {extra}")
+    if result["usage"]["calls"]:
+        lines.append(f"  {usage_line(result['usage'])}")
     if result["errors"]:
         lines.append(f"  errores: {len(result['errors'])} — {result['errors'][0]}")
     if result["unactionable"]:
         lines.append(f"  avisos sin sugerencia (descartados): {result['unactionable']}")
     return "\n".join(lines) + "\n"
+
+
+def coverage_line(detail):
+    """Recall over the first half of each fragment against the second.
+
+    A system that cannot see an error type misses it everywhere; one that runs
+    out of budget misses the back half. The two call for different fixes — a
+    rule pack against chunking — and the per-type table cannot tell them apart.
+    """
+    if not detail:
+        return None
+    halves = {"1ª mitad": [0, 0], "2ª mitad": [0, 0]}
+    for record in detail:
+        if record["side"] != "gold":
+            continue
+        bucket = halves["1ª mitad" if record["at"] < 0.5 else "2ª mitad"]
+        bucket[0] += bool(record["hit"])
+        bucket[1] += 1
+    parts = [
+        f"{name} {hit}/{total} ({hit / total:.3f})"
+        for name, (hit, total) in halves.items()
+        if total
+    ]
+    return "cobertura (recall por posición): " + ", ".join(parts) if parts else None
+
+
+def offschema_line(detail):
+    """Proposals labelled with something that is not a taxonomy type.
+
+    Worth a line of its own because a label the schema did not offer is free to
+    read and may predict a bad edit — a filter that costs no model call.
+    """
+    if not detail:
+        return None
+    predicted = [r for r in detail if r["side"] == "pred"]
+    off = [r for r in predicted if r["kind"] not in ERROR_TYPES]
+    if not off:
+        return None
+    wrong = sum(1 for r in off if not r["hit"])
+    return (
+        f"etiquetas fuera de taxonomía: {len(off)} de {len(predicted)} propuestas, "
+        f"{wrong} de ellas falsas"
+    )
+
+
+def usage_line(usage):
+    """Tokens and latency per call.
+
+    H1 asks for these from the first run: the cheap model is a reasoning model
+    whose deliberation is billed as output and capped by `max_tokens`, so
+    «output tokens» alone does not say whether a call is close to truncating.
+    """
+    calls = usage["calls"]
+    reasoning = usage.get("reasoning_tokens", 0)
+    thinking = f", de ellos {reasoning / calls:,.0f} razonando" if reasoning else ""
+    return (
+        f"uso: {calls} llamadas, {usage['input_tokens'] / calls:,.0f} tok entrada, "
+        f"{usage['output_tokens'] / calls:,.0f} salida{thinking}, "
+        f"{usage['seconds'] / calls:.1f} s por llamada"
+    )
 
 
 def summarise_corpus(cases):

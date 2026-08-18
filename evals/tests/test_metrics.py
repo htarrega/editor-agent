@@ -117,5 +117,47 @@ class Stylometry(unittest.TestCase):
             self.assertEqual(value, 0.0)
 
 
+class Outcomes(unittest.TestCase):
+    """The per-edit record and the tallies read the same clustering, so a hit
+    here and a TP there can never disagree."""
+
+    TEXT = "el vasu de sidra y la mesa corrio"
+
+    def gold(self):
+        return [Edit(start=3, end=7, replacement="vaso", kind="ortografia_bv")]
+
+    def test_a_matched_pair_is_a_hit_on_both_sides(self):
+        pred = [Edit(start=3, end=7, replacement="vaso", kind="ortografia_bv")]
+        records = metrics.outcomes(self.TEXT, self.gold(), pred)
+        self.assertEqual([r.hit for r in records], [True, True])
+        self.assertEqual([r.side for r in records], ["gold", "pred"])
+
+    def test_a_miss_and_a_false_positive_are_both_recorded(self):
+        pred = [Edit(start=27, end=33, replacement="corrió", kind="tilde")]
+        records = metrics.outcomes(self.TEXT, self.gold(), pred)
+        self.assertEqual([(r.side, r.hit) for r in records], [("gold", False), ("pred", False)])
+
+    def test_it_keeps_the_text_and_the_position(self):
+        record = metrics.outcomes(self.TEXT, self.gold(), [])[0]
+        self.assertEqual((record.before, record.after), ("vasu", "vaso"))
+        self.assertAlmostEqual(record.at, 3 / len(self.TEXT))
+
+    def test_the_raw_label_survives(self):
+        # Normalising here would erase the off-taxonomy signal.
+        pred = [Edit(start=3, end=7, replacement="vaso", kind="ortotipografía")]
+        record = [r for r in metrics.outcomes(self.TEXT, self.gold(), pred) if r.side == "pred"][0]
+        self.assertEqual(record.kind, "ortotipografía")
+
+    def test_hits_agree_with_the_tallies(self):
+        pred = [
+            Edit(start=3, end=7, replacement="vaso", kind="ortografia_bv"),
+            Edit(start=27, end=33, replacement="corrió", kind="tilde"),
+        ]
+        records = metrics.outcomes(self.TEXT, self.gold(), pred)
+        tally = metrics.score(self.TEXT, self.gold(), pred).overall
+        self.assertEqual(sum(r.hit for r in records if r.side == "gold"), tally.tp_gold)
+        self.assertEqual(sum(r.hit for r in records if r.side == "pred"), tally.tp_pred)
+
+
 if __name__ == "__main__":
     unittest.main()

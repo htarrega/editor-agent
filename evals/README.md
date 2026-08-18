@@ -6,6 +6,7 @@ python -m evals.run --systems null,languagetool
 python -m evals.run --repeats 4           # N corrupted versions per fragment
 python -m evals.run --limit-words 300     # cheap smoke run
 python -m evals.run --reuse               # only what has no cached numbers is called
+python -m evals.run --reuse --fresh corrector-v0   # ...but never cache the one being built
 python -m unittest discover -s evals/tests -t .
 ```
 
@@ -26,6 +27,10 @@ python -m evals.run --reuse evals/results/20260817-230537-claude-final.json
 
 Reused rows are marked `↺ caché` in the table and carry `reused_from` in the report.
 Their cost and seconds columns are what the original run paid, not this one.
+
+`--fresh` names the systems that are always called live. The system under development
+has a cache too from its previous run, and reusing *that* is how a run comes to
+publish last week's numbers as this week's.
 
 Numbers only travel between runs built from the same corpus. A report is skipped
 unless its fragments, seed, rate, repeats, truncation and `--skip-clean` match and
@@ -61,10 +66,16 @@ false positive when a system correctly spots it.
 | `reuse.py` | takes a system's numbers from an earlier report, if it is comparable |
 | `run.py` | CLI, table and report |
 
+The systems themselves: `null` and `languagetool` and the naive prompts are baselines
+and live in `systems.py`; `corrector-v0` is the pipeline, and lives in `corrector/`
+(`correct.py` for the pass, `llm.py` for the providers and the prices).
+`corrector-claude` is the same pass on the strong model — not a baseline, a way of
+telling apart what the prompt contributes from what the model does.
+
 The corruptor's invariant, checked on every run and in the tests:
 `apply_edits(result.text, result.gold) == result.clean`. If it fails, the run aborts.
 
 Environment variables: `EVAL_CLAUDE_MODEL`, `EVAL_DEEPSEEK_MODEL`,
-`LANGUAGETOOL_URL`.
+`EVAL_DEEPSEEK_EFFORT` (the corrector's `reasoning_effort`), `LANGUAGETOOL_URL`.
 
 Design decisions and measured results: `docs/PLAN.md` (H0).

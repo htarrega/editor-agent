@@ -11,16 +11,21 @@ import time
 import httpx
 from pydantic import BaseModel
 
+from corrector.correct import Corrector
 from corrector.edits import Edit, diff_edits, trim
+from corrector.llm import (
+    MAX_OUTPUT_TOKENS,
+    PRICING,
+    Usage,
+    bounded_deepseek,
+    claude_generate,
+    price,
+    spent,
+)
 
-# USD per million tokens.
-PRICING = {
-    "deepseek-v4-flash": (0.14, 0.28),
-    "deepseek-reasoner": (0.55, 2.19),
-    "claude-sonnet-5": (3.00, 15.00),
-    "claude-opus-5": (5.00, 25.00),
-    "claude-haiku-4-5": (1.00, 5.00),
-}
+# Re-exported: the harness talks about cost and usage in its own report, and
+# the modules around it read these off `systems`.
+__all__ = ["MAX_OUTPUT_TOKENS", "PRICING", "Usage", "price"]
 
 # The line this prompt must not cross: it may state the output contract, never
 # the correction policy. "Return only the corrected text" is what any writer
@@ -32,39 +37,22 @@ NAIVE_PROMPT = (
     "con los mismos saltos de línea y sin comentarios ni explicaciones.\n\n"
 )
 
-MAX_OUTPUT_TOKENS = 32000
-
 FENCE = re.compile(r"\A\s*```[^\n]*\n(?P<body>.*)\n```\s*\Z", re.DOTALL)
 
 
-class Usage(BaseModel):
-    calls: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost_usd: float = 0.0
-    seconds: float = 0.0
-
-    def add(self, other):
-        self.calls += other.calls
-        self.input_tokens += other.input_tokens
-        self.output_tokens += other.output_tokens
-        self.cost_usd += other.cost_usd
-        self.seconds += other.seconds
-
-
 class Output(BaseModel):
+    """What the harness asks of every system.
+
+    ``skipped`` is anything the system wanted to say but could not turn into an
+    applicable edit; ``rejected`` breaks that number down by reason, for the
+    systems that know why.
+    """
+
     edits: list[Edit] = []
     usage: Usage = Usage()
     skipped: int = 0
+    rejected: dict[str, int] = {}
     errors: list[str] = []
-
-
-def price(model, input_tokens, output_tokens):
-    # A model missing from PRICING is a config error, not a free run. Cost per
-    # run is what H7 is measured on, so a silent $0.00 is worse than a crash —
-    # and `build` catches it before a single paid call goes out.
-    rates = PRICING[model]
-    return (input_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
 
 
 class NullSystem:
@@ -206,21 +194,17 @@ class NaivePromptSystem:
         out = Output()
         started = time.monotonic()
         try:
-            corrected, input_tokens, output_tokens = self._generate(self.model, self.prompt + text)
+            # No system prompt: the request that produced the cached baseline
+            # numbers had none, and those numbers are still in the table.
+            reply = self._generate(self.model, "", self.prompt + text)
         except Exception as exc:
             out.errors.append(f"{type(exc).__name__}: {exc}")
             out.usage.calls += 1
             out.usage.seconds += time.monotonic() - started
             return out
 
-        out.usage = Usage(
-            calls=1,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=price(self.model, input_tokens, output_tokens),
-            seconds=time.monotonic() - started,
-        )
-        out.edits = diff_edits(text, _unfence(corrected))
+        out.usage = spent(self.model, reply, time.monotonic() - started)
+        out.edits = diff_edits(text, _unfence(reply.text))
         return out
 
 
@@ -230,39 +214,38 @@ def _unfence(text):
     return match.group("body") if match else text.strip("\n")
 
 
-def deepseek_generate(model, prompt):
-    # Imported here so the offline systems run without the provider SDKs.
-    from openai import OpenAI
-
-    client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    choice = response.choices[0]
-    if choice.finish_reason == "length":
-        raise RuntimeError("response truncated by max_tokens")
-    usage = response.usage
-    return choice.message.content or "", usage.prompt_tokens, usage.completion_tokens
+# --- the pipeline under development -----------------------------------------
 
 
-def claude_generate(model, prompt):
-    import anthropic
+class CorrectorSystem:
+    """Puts ``corrector.correct.Corrector`` on the harness's table.
 
-    client = anthropic.Anthropic()
-    with client.messages.stream(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        response = stream.get_final_message()
-    if response.stop_reason == "refusal":
-        raise RuntimeError(f"refusal: {response.stop_details}")
-    text = "".join(block.text for block in response.content if block.type == "text")
-    if response.stop_reason == "max_tokens":
-        raise RuntimeError("response truncated by max_tokens")
-    return text, response.usage.input_tokens, response.usage.output_tokens
+    A thin adapter and not a shared base class: the pipeline is the product and
+    must not import the thing that measures it, so the two result types stay
+    separate and this is where they meet.
+    """
+
+    def __init__(self, name, corrector):
+        self.name = name
+        self.corrector = corrector
+
+    @property
+    def model(self):
+        return self.corrector.model
+
+    @property
+    def prompt(self):
+        return self.corrector.prompt
+
+    def correct(self, text):
+        result = self.corrector.correct(text)
+        return Output(
+            edits=result.edits,
+            usage=result.usage,
+            skipped=result.skipped,
+            rejected=result.rejected,
+            errors=result.errors,
+        )
 
 
 # --- registry ---------------------------------------------------------------
@@ -270,21 +253,42 @@ def claude_generate(model, prompt):
 BUILDERS = {
     "null": NullSystem,
     "languagetool": LanguageToolSystem,
+    # Bounded like the corrector, and for the same reason: unbounded it does
+    # not finish a literary fragment at all (H0), so there is no baseline to
+    # read. The cap is part of what this row means. Holding the model and the
+    # effort fixed and changing only the prompt is what separates what our
+    # prompt contributes from what the model does — the other diagonal of the
+    # same square as `corrector-claude`.
     "naive-deepseek": lambda: NaivePromptSystem(
         "naive-deepseek",
         os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
-        deepseek_generate,
+        bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
     ),
     "naive-claude": lambda: NaivePromptSystem(
         "naive-claude", os.environ.get("EVAL_CLAUDE_MODEL", "claude-sonnet-5"), claude_generate
     ),
+    "corrector-v0": lambda: CorrectorSystem(
+        "corrector-v0",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
+        ),
+    ),
+    # The same pass on the strong model. Not a baseline and not the target
+    # either: it separates what the pipeline contributes from what the model
+    # does, by putting our prompt and naive-claude's model in the same row.
+    "corrector-claude": lambda: CorrectorSystem(
+        "corrector-claude",
+        Corrector(os.environ.get("EVAL_CLAUDE_MODEL", "claude-sonnet-5"), claude_generate),
+    ),
 }
 
 # The plan asks for two baselines: LanguageTool and a naive prompt to a strong
-# model. naive-deepseek stays registered for ad-hoc checks but out of the
-# default set: it is a reasoning model and does not finish a literary fragment
-# within MAX_OUTPUT_TOKENS (see docs/PLAN.md, H0).
-DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude"]
+# model. `naive-deepseek` and `corrector-claude` stay registered but out of the
+# default set: they are the two off-diagonal cells of the prompt × model square,
+# run when the question is which of the two is doing the work, not what the
+# pipeline currently scores.
+DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-v0"]
 
 
 def build(names):
