@@ -1,0 +1,10 @@
+# 100 columns, not the default 88: the prose in this codebase's comments and
+# docstrings carries as much of the argument as the code does, and 88 breaks
+# the tables and the pipeline diagram it explains.
+line-length = 100
+target-version = "py312"
+
+[lint]
+# E/F is pyflakes plus pycodestyle, I is import order — the one thing a
+# formatter alone leaves to habit.
+select = ["E", "F", "I"]
