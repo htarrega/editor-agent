@@ -135,7 +135,7 @@ def parse_edits(raw):
 
 
 class Corrector:
-    """One pass over a text. The unit H2 will wrap in a verifier."""
+    """One pass over a text. The unit H5 will chunk a manuscript into."""
 
     def __init__(self, model, generate, prompt=None, block_words=None):
         self.model = model

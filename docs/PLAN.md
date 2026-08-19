@@ -70,7 +70,7 @@ Corpus of 4 fragments, 8254 words, 165 seeded errors (`seed 0`, `rate 0.02`).
 | naive-claude | 0.894 | 0.921 | **0.899** | 2.18 | 0.002 | $1.32 |
 
 **F0.5 > 0.899, with FP/1k < 2.18 and voice < 0.002.** And the real gap is in the cost:
-`naive-claude` comes to **$1.60 per 10,000 words** and H7 asks for cents.
+`naive-claude` comes to **$1.60 per 10,000 words** and the product needs cents.
 
 A strong model with a one-line prompt already scores 100% on 9 of 17 types and barely
 overcorrects. ARCHITECTURE §1 already warned that it cannot be beaten on raw intelligence
@@ -176,9 +176,10 @@ Baselines reused; everything else measured live. `evals/results/20260818-133524-
 | corrector-claude | 0.987 | 0.909 | **0.970** | 0.12 | 0.000 | 1.0144 | 54.6 |
 
 The bar was F0.5 > 0.899 with FP/1k < 2.18 and voice < 0.002. Met, with no failed calls and
-no truncation. The margin is real and not a lucky draw: two independent runs of
-`corrector-v0` on the identical corpus scored 0.926 and 0.929, so the ~0.028 lead over the
-best baseline is about ten times the run-to-run spread.
+no truncation. The lead over the baseline survives — six later runs on this exact corpus all
+clear 0.899 — but the sentence that used to stand here, claiming the run-to-run spread was
+0.003 and the margin ten times it, was an artefact of having measured exactly twice. The
+spread is 0.043. See «the run-to-run spread is the finding» below.
 
 ### Finding: the pipeline is worth more than the model, and most to the cheap one
 
@@ -203,11 +204,12 @@ The number the product is: **`corrector-v0` at 0.929 beats `naive-claude` at 0.8
 of the cost** ($0.029 against $1.6030 per 10k words). A cheap model inside the pipeline beats
 a strong model pasted into a chat. That was the thesis; it is now measured.
 
-H7's "cents per 10k words" is therefore met at H1, before caching, batching or routing. What
-has not moved is latency — 59.4 s per call, of which 7,690 of 8,694 output tokens are
-reasoning. **Nearly 90% of what the workhorse costs is deliberation, not answer.** The calls
-are independent, so this is a concurrency problem rather than a research one, and it belongs
-with H5 rather than H7.
+The cost goal — cents per 10,000 words — is therefore met here, at H1, before caching,
+batching or routing, which is why no separate cost milestone survives in this plan. What has
+not moved is latency: 59.4 s per call, of which 7,690 of 8,694 output tokens are reasoning.
+**Nearly 90% of what the workhorse costs is deliberation, not answer.** The calls are
+independent, so this is a concurrency problem rather than a research one, and it is settled
+in H5.
 
 ### Finding: the cheap model's recall gap is one fragment, and it is the one with 220-word paragraphs
 
@@ -229,22 +231,37 @@ bounded-reasoning model and the mechanism is not yet pinned down. **This is H5's
 re-cast as an accuracy question rather than a scale one**, and the cheap experiment that
 settles it is to re-cut `carta` into smaller numbered blocks and re-measure.
 
-### Finding: below ~5 events per run the harness cannot tell signal from noise
+### Finding: the run-to-run spread is the finding, and one run decides nothing
 
-Two runs of `corrector-v0` over the identical corpus, differing only in sampling: clean-text
-false positives went **3 → 0**; `raya_dialogo` 6/10 → 8/10; `homofono` 13/14 → 11/14;
-`concordancia_genero` 11/14 → 13/14. Overall F0.5 moved 0.003, so the headline is stable, but
-everything built on small counts is not.
+`corrector-v0`, six times over the identical corpus (fingerprint `d5e1ee1f`, `seed 0`,
+`rate 0.02`, `repeats 1`), changing nothing but the model's own sampling:
 
-Two consequences, both of which change later milestones:
+| | | | | | | mean | spread |
+|---|---|---|---|---|---|---|---|
+| **F0.5** | 0.926 | 0.929 | 0.942 | 0.938 | 0.911 | 0.954 | 0.933 | **0.043** |
+| **recall** | 0.836 | 0.848 | 0.879 | 0.842 | 0.788 | 0.903 | 0.849 | **0.115** |
 
-- **FP/1k has stopped being a usable headline metric.** At 0–3 events per 8254 words it
-  reports the draw, not the system. Corpus B needs to be much larger, or `--repeats` raised,
-  before overcorrection can be compared between two systems at this quality level.
-- **H4 cannot be run as written.** A failure-driven rule pack chooses its targets from
-  per-type counts, and those counts are 2–16 items carrying ±2 of noise. Writing rules
-  against that is writing rules against sampling error, and the eval would then "confirm"
-  them at about the rate of a coin flip. More corpus and more repeats come first.
+This was first written up from two runs as a spread of 0.003 affecting only small counts.
+That was wrong, and wrong in the direction that matters: the *headline* moves by ±0.02 and
+recall by ±0.06, which is the size of the effects these milestones are trying to detect.
+
+It was not a harmless error. Chunking (H5) was measured once and declared a win, measured
+again and declared dead, and only settled on the third attempt with `--repeats 3` — three
+conclusions from the same code, two of them wrong. **A single run of this harness is a draw
+from a distribution, not a measurement**, and no milestone below closes on one.
+
+Three consequences:
+
+- **FP/1k is not a usable headline metric.** At 0–3 events per 8254 words it reports the
+  draw, not the system. Corpus B has to grow, or `--repeats` be raised, before overcorrection
+  can be compared between two systems at this quality level.
+- **`--repeats` is the default posture, not an option.** It was affordable only after the
+  harness learned to run its calls concurrently (H5): `--repeats 3` is 3× the calls at
+  roughly the same wall clock.
+- **Two systems are compared on paired outcomes, not on two headline numbers.** Both systems
+  see byte-identical corrupted text, so every seeded error is a paired trial and the right
+  test is McNemar on the discordant pairs. The H5 result below is the first to use it, and
+  it reversed what the headline numbers said on single runs.
 
 ### Refuted: an off-taxonomy label does not predict a bad edit
 
@@ -259,37 +276,28 @@ A side observation from the same data: `corrector-claude` emitted **zero** off-s
 where `corrector-v0` emitted 42%. Schema adherence is a model property, and the taxonomy is
 therefore worth validating in code rather than trusting to the prompt.
 
-## H2 — Verifier (overcorrection control)
-
-> **H1 undercut this milestone's premise.** A verifier exists to remove false positives, and
-> after H1 there are almost none left to remove: `corrector-v0` makes 0–3 per 8254 clean
-> words and `corrector-claude` makes 1. Its whole ceiling is a handful of edits, bought with
-> a second paid pass and paid for in recall — which is now the weak side of the ledger, not
-> the strong one. Either re-scope it to a second pass that only *proposes* and never rejects,
-> pointing the same architecture at recall, or drop it and fold overcorrection control into
-> H4. Not to be started before the noise finding above is addressed, since at 0–3 events the
-> eval cannot show whether a verifier helped.
-
-- A second pass that accepts/rejects each edit; disagreement → strong arbiter or "doubtful".
-- **Done when**: the false-positive rate on corpus B drops measurably without sinking recall
-  on corpus A.
-
 ## H3 — Voice profile
-- A single pass that extracts the manuscript's stylistic profile; the verifier uses it as
-  policy (deliberate traits are left alone).
+
+> The verifier this milestone was written against is gone (see «Dropped milestones»), so the
+> profile feeds the corrector's own prompt rather than a second pass, and it is measured
+> against the corrector rather than against a verifier.
+
+- A single pass that extracts the manuscript's stylistic profile; the corrector takes it as
+  policy, so deliberate traits are left alone.
 - Strict separation: mechanical edits are applied, style stays as a suggestion.
-- **Done when**: the stylometric distance original↔corrected drops against H2 and dialogue
-  with deliberate traits survives intact in a test case.
+- **Done when**: the stylometric distance original↔corrected drops against `corrector-blocks`
+  and dialogue with deliberate traits survives intact in a test case — over `--repeats 3`,
+  never one run.
 
 ## H4 — Failure-driven rule pack
 
-> **Blocked on measurement, not on ideas.** This milestone picks its targets from per-type
-> failures, and H1 showed those counts swing by ±2 between identical runs on 2–16 item
-> samples. Enlarging the corpus and raising `--repeats` until a per-type number means
-> something is a prerequisite, not a refinement. Two targets do survive the noise, having
-> held across both runs and both models: `comillas` sticks at 4/6 even for
-> `corrector-claude`, and `loismo` at 1/2 — those two are real, and the per-edit record now
-> says which instances were missed.
+> **Still blocked on measurement, but the block is smaller.** This milestone picks its
+> targets from per-type failures, and at `repeats 1` those counts were 2–16 items carrying
+> ±2 of noise. `--repeats 3` triples them at roughly unchanged wall clock, and the paired
+> McNemar test is the tool for deciding whether a rule helped rather than two headline
+> numbers. Two targets survived even the noisy measurement and are still there at
+> `repeats 3`: `comillas` at 14/22 for `corrector-blocks` and `loismo` at 3/4. Chunking
+> already took a slice of `comillas` for free, so re-measure before writing a rule for it.
 
 - Analyse the eval's per-type failures; write RAE/Fundéu rules only for what fails.
 - Every new rule ↔ a new error type in the corruptor.
@@ -297,32 +305,119 @@ therefore worth validating in code rather than trusting to the prompt.
 
 ## H5 — Full manuscript
 
-> **Promoted: chunking is an accuracy lever, not only a scale one.** H1 found the cheap
-> model's whole recall deficit in the one fragment with 220-word paragraphs (0.636 against
-> 0.926 on the rest). Cutting text into smaller units is therefore the largest recall
-> improvement currently on the table, and no rule pack can match it because it lifts every
-> type at once. The experiment that settles it costs about $0.01: re-cut `carta` into
-> smaller numbered blocks and re-measure. Latency belongs here too — the calls are
-> independent, so 59.4 s each is a concurrency problem, and a 50k-word manuscript is ~25
-> calls.
+> **Chunking is measured and it is in; latency is closed.** Both of the questions this
+> milestone inherited from H1 are answered below. What remains is the manuscript-scale
+> machinery: overlap, glossary, global consistency pass, final report.
 
 - Chunking with overlap, name glossary, global consistency pass, final report (corrected
   document + list of applied corrections and suggestions with a diff).
 - **Done when**: it processes a 30–50k-word text end to end with no intervention.
+
+### Result: chunking raises the floor, and the floor is what matters
+
+`corrector/blocks.py` cuts an over-long line into blocks of at most `block_words` words at
+its own sentence boundaries. The text is never touched: cutting changes how the same
+characters are numbered, nothing else. `corrector-blocks` is `corrector-v0` with
+`block_words=50` and everything else held fixed — same model, same `reasoning_effort`, same
+prompt, same token cap.
+
+`--repeats 3`: 12 corrupted versions, 495 seeded errors, both systems fed byte-identical
+text, no failed calls (`20260819-135324-blocks-repeats3.json`).
+
+| system | P | R | F0.5 | FP/1k | anchors rejected | $ | wall |
+|---|---|---|---|---|---|---|---|
+| corrector-v0 | 0.957 | 0.820 | 0.926 | 0.24 | 16 | 0.0545 | 260 s |
+| **corrector-blocks** | **0.968** | **0.875** | **0.948** | **0.12** | **4** | 0.0538 | 243 s |
+
+Every seeded error is a paired trial, since both systems saw the same text. Pairing them:
+378 caught by both, 34 by neither, **28 only by `corrector-v0`, 55 only by
+`corrector-blocks`** — exact McNemar two-sided p = 0.004.
+
+**Yet case by case it is 6–5 and a tie.** Blocks wins the aggregate because its wins are
+large and its losses small, and the spread across the three samples of each fragment says
+why:
+
+| fragment | corrector-v0 | corrector-blocks |
+|---|---|---|
+| `carta` (245 words/paragraph) | 0.455 – 0.841 | **0.705 – 0.841** |
+| `hierro` | 0.784 – 0.961 | **0.882 – 0.941** |
+| `diccionario` | 0.886 – 1.000 | 0.857 – 0.943 |
+| `sidra` | 0.886 – 0.914 | 0.857 – 0.943 |
+
+Chunking does not lift the ceiling — on the two short-paragraph fragments `corrector-v0` is
+level or ahead. It lifts the *floor*, and only where paragraphs are long: on `carta` the
+worst draw goes from 0.455 to 0.705. **The cheap model is not made cleverer by being shown
+smaller blocks, it is made predictable**, and for a 50k-word manuscript that is the property
+that matters, because what ruins a manuscript is the bad draw and not the average.
+
+This also answers the question H1 left open. The mechanism is not a bounded number of edits
+per block and not the model giving up partway through: recall by position is flat for both
+systems (0.879 first half against 0.871 second). A long block is under-read evenly
+throughout, and shorter blocks lift the whole curve.
+
+One gain is mechanical rather than statistical: **4 rejected anchors against 16**. A short
+anchor is already unique inside a 50-word block, so proposals stop dying as
+`anchor_ambiguous`. Cost and latency are a wash.
+
+Caveat on the p-value: McNemar treats the 495 errors as independent and they are not
+entirely — errors inside one call share a single deliberation, so the effective sample is
+nearer 12 calls than 495 errors. Read p = 0.004 as optimistic; the floor-raising table does
+not rest on that assumption and is the conservative reading.
+
+### Decision: the harness runs its calls concurrently
+
+`evals/run.py:correct_all` maps `system.correct` over the texts through a thread pool, sized
+by `--concurrency` (default 4). Measured 168 s of wall clock against 481 s of summed call
+latency. Two properties make it safe rather than merely fast:
+
+- **Results come back in input order.** Scores, false-positive samples and the per-edit
+  record are appended in corpus order, so out-of-order results would have two runs of one
+  corpus writing two different reports, neither of them wrong.
+- **`usage.seconds` is concurrency-invariant**, because it sums each call's own duration. It
+  therefore keeps meaning exactly what it meant in H1's table, and for the same reason cannot
+  show a speedup — hence `wall_seconds` recorded beside it.
+
+A system may pin its own ceiling: `LanguageToolSystem.concurrency = 1`, because it paces
+itself against a 20-requests-per-minute limit and overlapping its chunks would spend the
+allowance faster rather than finish sooner.
+
+This is a prerequisite rather than a convenience: `--repeats 3` is what settled chunking, and
+it was only affordable once the calls overlapped.
+
+### Finding: the truncation that killed a run was a draw, not a budget
+
+One `corrector-blocks` call on `carta` died with `response truncated by max_tokens` at 32,000
+output tokens, which took the fragment out of the run and made the row look like a loss.
+Raising the cap to 64,000 and re-running produced no truncation at all and spent ~10,000
+output tokens per call — a third of the *old* cap. The runaway is stochastic, so a bigger cap
+is insurance and not a fix.
+
+A run that moves it is measuring something else, so `MAX_OUTPUT_TOKENS` reads
+`EVAL_MAX_OUTPUT_TOKENS` and every report records the value it used, next to `max_retries`.
+Both SDKs already retried twice on 429s and 5xx; that is now pinned explicitly at 3 rather
+than inherited from a default that can move under an upgrade, because a failed call is not a
+bad score — it is a fragment dropped from the false-positive rate.
 
 ## H6 — Google Drive
 - Read a document from Drive, write the corrected version + the report (Docs with
   suggestions or a copy).
 - **Done when**: a full cycle from a real Doc of the user's.
 
-## H7 — Cost
+## Dropped milestones
 
-> **The cost target was met at H1** — $0.0291 per 10k words against `naive-claude`'s
-> $1.6030, before any of the techniques listed below. What is left of this milestone is
-> latency, and that moved to H5 because it is concurrency rather than pricing.
+Kept as two lines each because the reason they died is a measurement, and that is worth more
+than the milestone was.
 
-- Prompt caching, batch API if the provider offers one, routing (arbiter only when needed).
-- **Done when**: the cost per 10k words is published in the eval report and is stable.
+**H2 — Verifier (overcorrection control).** A second pass accepting or rejecting each edit,
+with a strong arbiter on disagreement. Dropped: H1 removed its premise. A verifier exists to
+delete false positives and there are almost none left — 0.12 per 1,000 clean words for
+`corrector-blocks`. Its entire ceiling was a handful of edits, bought with a second paid pass
+and paid for in recall, which is the weak side of the ledger. Overcorrection control folds
+into H4.
+
+**H7 — Cost.** Prompt caching, batch API, routing. Dropped: the target was met at H1 —
+$0.0291 per 10k words against `naive-claude`'s $1.6030 — before any of those techniques were
+applied. The latency half moved to H5, where concurrency settled it.
 
 ## Future work — Narrative coherence (continuity checking)
 Developmental editing, not orthotypographic: detecting continuity errors in long manuscripts

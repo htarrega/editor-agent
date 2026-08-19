@@ -66,7 +66,7 @@ class Usage(BaseModel):
 
 def price(model, input_tokens, output_tokens):
     # A model missing from PRICING is a config error, not a free run. Cost per
-    # run is what H7 is measured on, so a silent $0.00 is worse than a crash —
+    # run is what the cost claim rests on, so a silent $0.00 is worse than a crash —
     # and `systems.build` catches it before a single paid call goes out.
     rates = PRICING[model]
     return (input_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
