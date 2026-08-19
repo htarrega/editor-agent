@@ -364,11 +364,21 @@ entirely — errors inside one call share a single deliberation, so the effectiv
 nearer 12 calls than 495 errors. Read p = 0.004 as optimistic; the floor-raising table does
 not rest on that assumption and is the conservative reading.
 
-`corrector-blocks` is therefore the default in `DEFAULT_SYSTEMS`, and `corrector-v0` is
-frozen at what H1 measured: its numbers are quoted throughout this document and cached in
-past reports, so changing it would make those rows stop meaning what they say. What has
-*not* been swept is `block_words` itself — 50 is the only value measured, chosen because it
-is the order of the paragraphs the model already handles well, not because it won a search.
+`corrector-blocks` is therefore the default in `DEFAULT_SYSTEMS`, and the pipeline itself
+defaults to `DEFAULT_BLOCK_WORDS = 50`: a `Corrector` built anywhere — H5's manuscript
+machinery included — gets the setting that was measured better, rather than the losing one
+with the registry as the only place that knew.
+
+The two rows H1's numbers rest on, `corrector-v0` and `corrector-claude`, ask for
+`block_words=None` **by name** instead of inheriting it. Their numbers are quoted throughout
+this document and cached in past reports, so they have to keep meaning what they say while
+the default moves underneath them. `corrector-claude` in particular is one half of the
+prompt-against-model square, measured before the blocks existed; a chunked strong model is a
+row nobody has paid for and would need a name of its own.
+
+What has *not* been swept is `block_words` itself — 50 is the only value measured, chosen
+because it is the order of the paragraphs the model already handles well, not because it won
+a search.
 
 ### Decision: the harness runs its calls concurrently
 

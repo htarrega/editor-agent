@@ -19,7 +19,7 @@ from collections import Counter
 
 from pydantic import BaseModel, ValidationError
 
-from corrector.blocks import block_spans
+from corrector.blocks import DEFAULT_BLOCK_WORDS, block_spans
 from corrector.edits import Edit, ProposedEdit, resolve_edits, trim
 from corrector.llm import Usage, spent
 from corrector.taxonomy import ERROR_TYPES
@@ -137,7 +137,9 @@ def parse_edits(raw):
 class Corrector:
     """One pass over a text. The unit H5 will chunk a manuscript into."""
 
-    def __init__(self, model, generate, prompt=None, block_words=None):
+    def __init__(self, model, generate, prompt=None, block_words=DEFAULT_BLOCK_WORDS):
+        # `block_words=None` is one block per line, which is what H1 measured and
+        # what the frozen reference rows in the harness ask for by name.
         self.model = model
         self.prompt = (prompt or PROMPT).format(kinds=kinds_block())
         self.block_words = block_words

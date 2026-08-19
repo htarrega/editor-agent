@@ -17,6 +17,13 @@ import re
 
 from corrector.edits import line_spans
 
+# What a block holds unless a caller says otherwise. Measured over `--repeats 3`
+# against one block per line: F0.5 0.948 vs 0.926, and the worst draw on the
+# fragment with 245-word paragraphs rises from 0.455 to 0.705 (docs/PLAN.md, H5).
+# It is the order of the paragraphs the model already handles well — and the only
+# value ever measured, not the winner of a sweep.
+DEFAULT_BLOCK_WORDS = 50
+
 # A sentence ends at closing punctuation followed by space. Any closing quote
 # or bracket travels with it, so «vámonos». cuts after the closing quote and
 # not between the period and it.

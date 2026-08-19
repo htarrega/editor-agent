@@ -1,5 +1,6 @@
 import unittest
 
+from corrector import blocks
 from evals import systems
 
 
@@ -53,3 +54,22 @@ class Pricing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrozenRows(unittest.TestCase):
+    """Rows whose numbers are quoted in docs/PLAN.md must not move when the
+    pipeline's own defaults do. They ask for their numbering by name."""
+
+    def test_the_pipeline_defaults_to_the_measured_block(self):
+        self.assertEqual(
+            systems.BUILDERS["corrector-blocks"]().block_words, blocks.DEFAULT_BLOCK_WORDS
+        )
+
+    def test_h1_reference_rows_stay_on_line_numbering(self):
+        for name in ("corrector-v0", "corrector-claude"):
+            with self.subTest(name):
+                self.assertIsNone(systems.BUILDERS[name]().block_words)
+
+    def test_the_default_row_is_the_one_that_won(self):
+        self.assertIn("corrector-blocks", systems.DEFAULT_SYSTEMS)
+        self.assertNotIn("corrector-v0", systems.DEFAULT_SYSTEMS)

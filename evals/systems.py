@@ -284,6 +284,10 @@ BUILDERS = {
         Corrector(
             os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
             bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
+            # One block per line, spelled out rather than inherited: the pipeline
+            # now defaults to 50 words, and this row has to keep meaning what H1
+            # measured even as that default moves.
+            block_words=None,
         ),
     ),
     # The corrector under development, and the default. `corrector-v0` with the
@@ -304,9 +308,17 @@ BUILDERS = {
     # The same pass on the strong model. Not a baseline and not the target
     # either: it separates what the pipeline contributes from what the model
     # does, by putting our prompt and naive-claude's model in the same row.
+    # Pinned to line numbering for the same reason as `corrector-v0`: it is the
+    # other half of H1's prompt-against-model square, and that square was
+    # measured before the blocks existed. A chunked strong model is a row nobody
+    # has paid for yet, and it would need a name of its own.
     "corrector-claude": lambda: CorrectorSystem(
         "corrector-claude",
-        Corrector(os.environ.get("EVAL_CLAUDE_MODEL", "claude-sonnet-5"), claude_generate),
+        Corrector(
+            os.environ.get("EVAL_CLAUDE_MODEL", "claude-sonnet-5"),
+            claude_generate,
+            block_words=None,
+        ),
     ),
 }
 
