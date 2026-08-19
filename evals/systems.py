@@ -11,6 +11,7 @@ import time
 import httpx
 from pydantic import BaseModel
 
+from corrector import settings
 from corrector.correct import Corrector
 from corrector.edits import Edit, diff_edits, trim
 from corrector.llm import (
@@ -269,8 +270,8 @@ BUILDERS = {
     # same square as `corrector-claude`.
     "naive-deepseek": lambda: NaivePromptSystem(
         "naive-deepseek",
-        os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
-        bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
+        os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+        bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
     ),
     "naive-claude": lambda: NaivePromptSystem(
         "naive-claude", os.environ.get("EVAL_CLAUDE_MODEL", "claude-sonnet-5"), claude_generate
@@ -282,8 +283,8 @@ BUILDERS = {
     "corrector-v0": lambda: CorrectorSystem(
         "corrector-v0",
         Corrector(
-            os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
-            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
             # One block per line, spelled out rather than inherited: the pipeline
             # now defaults to 50 words, and this row has to keep meaning what H1
             # measured even as that default moves.
@@ -300,9 +301,33 @@ BUILDERS = {
     "corrector-blocks": lambda: CorrectorSystem(
         "corrector-blocks",
         Corrector(
-            os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
-            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
-            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", "50")),
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+        ),
+    ),
+    # The same pass again, cut across calls instead of sent in one. `block_words`
+    # decides what the model reasons over; `blocks_per_call` decides how much of
+    # it travels per request, and only the first has ever been measured. Both
+    # rows exist to settle that second axis: batches amortise the system prompt
+    # over few calls, one-per-block pays it 56 times on `carta` but loses at most
+    # one block to a bad reply instead of the whole fragment.
+    "corrector-batched": lambda: CorrectorSystem(
+        "corrector-batched",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            blocks_per_call=int(os.environ.get("EVAL_BLOCKS_PER_CALL", "10")),
+        ),
+    ),
+    "corrector-per-block": lambda: CorrectorSystem(
+        "corrector-per-block",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            blocks_per_call=1,
         ),
     ),
     # The same pass on the strong model. Not a baseline and not the target

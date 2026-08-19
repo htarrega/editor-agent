@@ -2,8 +2,9 @@ import json
 import re
 import unittest
 
+from corrector.blocks import block_spans
 from corrector.correct import Corrector, kinds_block, parse_edits, render
-from corrector.edits import line_spans
+from corrector.edits import apply_edits, line_spans
 from corrector.llm import Reply
 from corrector.taxonomy import ERROR_TYPES
 
@@ -20,6 +21,26 @@ def fake(reply, spy=None):
             raise reply
         return Reply(text=reply, input_tokens=100, output_tokens=20, reasoning_tokens=8)
 
+    return generate
+
+
+def sequential(replies):
+    """A generate function that answers each call from `replies` in turn.
+
+    Unlike `fake`, it records every call it received rather than only the
+    last one: per-block mode makes several, and a test needs to see all of
+    them to check what each one was actually shown.
+    """
+    calls = []
+
+    def generate(model, system, user):
+        calls.append({"model": model, "system": system, "user": user})
+        reply = replies[len(calls) - 1]
+        if isinstance(reply, Exception):
+            raise reply
+        return Reply(text=reply, input_tokens=100, output_tokens=20, reasoning_tokens=8)
+
+    generate.calls = calls
     return generate
 
 
@@ -164,6 +185,187 @@ class CorrectorPass(unittest.TestCase):
         self.build(edits_json(), spy).correct(TEXT)
         self.assertIn("edición mínima", spy["system"])
         self.assertTrue(spy["user"].startswith("[1]\n"))
+
+    def test_per_block_defaults_to_off(self):
+        self.assertIsNone(Corrector("deepseek-v4-flash", fake(edits_json())).blocks_per_call)
+
+
+TWO_BLOCKS = "El vasu de sidra.\n—Dijistes que vendrias —dijo el vasu.\n"
+
+
+class PerBlockCorrectorPass(unittest.TestCase):
+    """Opt-in mode: one call per block instead of one call for the document.
+
+    ``per_block=False`` is the constructor default, so every test above this
+    class already pins the unchanged path; these only exercise what changes
+    when a caller opts in.
+    """
+
+    def build(self, generate, **kwargs):
+        return Corrector("deepseek-v4-flash", generate, blocks_per_call=1, **kwargs)
+
+    def test_default_construction_is_unaffected(self):
+        # Same fixture and assertions as `test_applies_an_anchored_edit`
+        # above, just spelled out here to pin that turning per_block on for
+        # one Corrector cannot be mistaken for a change to the default.
+        default = Corrector("deepseek-v4-flash", fake(edits_json()))
+        self.assertIsNone(default.blocks_per_call)
+
+    def test_issues_one_call_per_block(self):
+        spans = block_spans(TWO_BLOCKS)
+        self.assertEqual(len(spans), 2)
+        generate = sequential([edits_json(), edits_json()])
+        self.build(generate).correct(TWO_BLOCKS)
+        self.assertEqual(len(generate.calls), 2)
+
+    def test_each_call_renders_its_true_global_index(self):
+        # The trap: rendering `render(text, [span])` alone would label every
+        # one of these `[1]`, because `render` numbers from `enumerate(spans, 1)`
+        # and does not know where the lone span it was given really sits.
+        generate = sequential([edits_json(), edits_json()])
+        self.build(generate).correct(TWO_BLOCKS)
+        self.assertTrue(generate.calls[0]["user"].startswith("[1]\n"))
+        self.assertTrue(generate.calls[1]["user"].startswith("[2]\n"))
+
+    def test_a_proposal_resolves_inside_its_true_block_not_block_one(self):
+        # "vasu" exists once in block 1 and once in block 2. A model shown
+        # only its own block in isolation would, left to itself, answer
+        # "line": 1 regardless of which block it actually saw — this is
+        # exactly that reply for the call covering block 2. If block 2's
+        # proposals were not stamped with their true index before resolving,
+        # this would resolve against block 1's "vasu" instead, or not at all
+        # once "vasu" stops being unique in the whole text.
+        spans = block_spans(TWO_BLOCKS)
+        replies = [edits_json(), edits_json({"line": 1, "original": "vasu", "replacement": "vaso"})]
+        result = self.build(sequential(replies)).correct(TWO_BLOCKS)
+        self.assertEqual(len(result.edits), 1)
+        start = result.edits[0].start
+        self.assertTrue(spans[1][0] <= start < spans[1][1])
+        self.assertFalse(spans[0][0] <= start < spans[0][1])
+
+    def test_resolves_against_true_block_spans_not_line_spans(self):
+        # One line cut into several blocks: block numbering and line
+        # numbering disagree here, which is exactly what papers over
+        # `resolve_edits` being called without the block spans — it would
+        # fall back to one span per *line*, and this line is only one span.
+        text = (
+            "Una frase corta. Otra frase distinta que sigue aqui. "
+            "Y una tercera frase final aqui mismo.\n"
+        )
+        spans = block_spans(text, 4)
+        self.assertGreater(len(spans), 1)
+        self.assertLess(len(line_spans(text)), len(spans))
+
+        last = len(spans)
+        replies = [edits_json() for _ in range(last - 1)]
+        replies.append(edits_json({"line": last, "original": "frase", "replacement": "frase,"}))
+        result = self.build(sequential(replies), block_words=4).correct(text)
+
+        self.assertEqual(len(result.edits), 1)
+        start = result.edits[0].start
+        self.assertTrue(spans[-1][0] <= start < spans[-1][1])
+
+    def test_one_failing_block_does_not_lose_the_others_edits(self):
+        item = {"line": 2, "original": "vasu", "replacement": "vaso"}
+        replies = [RuntimeError("truncado"), edits_json(item)]
+        result = self.build(sequential(replies)).correct(TWO_BLOCKS)
+        self.assertEqual(len(result.edits), 1)
+        # trim() shrinks "vasu"→"vaso" to its one differing letter, same as
+        # the whole-document path does for the identical anchor.
+        self.assertEqual(result.edits[0].replacement, "o")
+        self.assertEqual(result.errors, ["RuntimeError: truncado"])
+
+    def test_every_block_failing_is_visible_as_every_call_failing(self):
+        replies = [RuntimeError("truncado"), RuntimeError("truncado")]
+        result = self.build(sequential(replies)).correct(TWO_BLOCKS)
+        self.assertEqual(result.edits, [])
+        self.assertEqual(len(result.errors), result.usage.calls)
+        self.assertEqual(result.usage.calls, 2)
+
+    def test_partial_failure_is_visible_as_fewer_errors_than_calls(self):
+        replies = [RuntimeError("truncado"), edits_json()]
+        result = self.build(sequential(replies)).correct(TWO_BLOCKS)
+        self.assertLess(len(result.errors), result.usage.calls)
+
+    def test_usage_aggregates_across_calls(self):
+        result = self.build(sequential([edits_json(), edits_json()])).correct(TWO_BLOCKS)
+        self.assertEqual(result.usage.calls, 2)
+        self.assertEqual(result.usage.input_tokens, 200)
+        self.assertEqual(result.usage.output_tokens, 40)
+        self.assertAlmostEqual(result.usage.cost_usd, 2 * (100 * 0.14 + 20 * 0.28) / 1e6)
+
+    def test_usage_still_costs_a_call_that_raises(self):
+        result = self.build(sequential([RuntimeError("truncado"), edits_json()])).correct(
+            TWO_BLOCKS
+        )
+        self.assertEqual(result.usage.calls, 2)
+
+    def test_proposed_and_rejected_aggregate_across_blocks(self):
+        # Block 1: one malformed item. Block 2: one anchor invented outright.
+        replies = [
+            edits_json({"original": "sin replacement"}),
+            edits_json({"line": 2, "original": "no existe", "replacement": "x"}),
+        ]
+        result = self.build(sequential(replies)).correct(TWO_BLOCKS)
+        self.assertEqual(result.proposed, 2)
+        self.assertEqual(result.rejected, {"malformed": 1, "anchor_not_found": 1})
+        self.assertEqual(result.skipped, 2)
+        self.assertEqual(result.edits, [])
+
+    def test_an_unreadable_reply_from_one_block_is_an_error_not_fatal(self):
+        replies = [
+            "No he encontrado errores.",
+            edits_json({"line": 2, "original": "vasu", "replacement": "vaso"}),
+        ]
+        result = self.build(sequential(replies)).correct(TWO_BLOCKS)
+        self.assertEqual(len(result.edits), 1)
+        self.assertEqual(
+            result.errors, ["unparseable reply: no JSON in reply: 'No he encontrado errores.'"]
+        )
+
+
+class BatchedCorrectorPass(unittest.TestCase):
+    """`blocks_per_call` greater than one: several blocks per call, still numbered
+    from where they really sit in the document."""
+
+    def corrector(self, size, replies):
+        self.seen = []
+        answers = iter(replies)
+
+        def generate(model, system, user):
+            self.seen.append(user)
+            return Reply(text=next(answers))
+
+        return Corrector("deepseek-v4-flash", generate, block_words=None, blocks_per_call=size)
+
+    def test_batches_the_blocks_into_calls_of_the_given_size(self):
+        text = "\n".join(f"linea {n}." for n in range(1, 8))  # 7 blocks
+        self.corrector(3, [edits_json()] * 3).correct(text)
+        self.assertEqual(len(self.seen), 3)
+        markers = [re.findall(r"^\[(\d+)\]$", call, re.M) for call in self.seen]
+        self.assertEqual(markers, [["1", "2", "3"], ["4", "5", "6"], ["7"]])
+
+    def test_a_line_from_outside_the_batch_is_not_trusted(self):
+        # Four blocks, two per call, and the second call answers with `line: 1`
+        # — a block it was never shown. The anchor sits in block 1 *and* block 4,
+        # so honouring that number would resolve the edit inside block 1, which
+        # the call had nothing to say about. Refusing it sends the anchor to the
+        # text-wide search, where two hits make it ambiguous and it is dropped.
+        text = "la casa roja.\notra linea.\ntercera linea.\nla casa azul."
+        item = {"line": 1, "original": "casa", "replacement": "casona"}
+        corrector = self.corrector(2, [edits_json(), edits_json(item)])
+        result = corrector.correct(text)
+        self.assertEqual(result.edits, [])
+        self.assertEqual(result.rejected, {"anchor_ambiguous": 1})
+
+    def test_a_single_block_batch_still_stamps_the_line(self):
+        text = "el gatto duerme.\nla casa roja."
+        item = {"line": 99, "original": "casa", "replacement": "casona"}
+        corrector = self.corrector(1, [edits_json(), edits_json(item)])
+        result = corrector.correct(text)
+        self.assertEqual(len(result.edits), 1)
+        applied, _ = apply_edits(text, result.edits)
+        self.assertEqual(applied, "el gatto duerme.\nla casona roja.")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,11 @@
 import hashlib
+import importlib
 import os
 import unittest
 from unittest import mock
 
 from corrector import blocks
+from corrector import settings as settings_module
 from evals import systems
 
 # The model and prompt every row in docs/PLAN.md was measured with, read back
@@ -74,6 +76,74 @@ class Pricing(unittest.TestCase):
             model = getattr(build(), "model", None)
             if model:
                 self.assertIn(model, systems.PRICING, name)
+
+
+class SettingsDefaults(unittest.TestCase):
+    """`corrector/settings.py` is the single place MODEL, EFFORT and
+    BLOCK_WORDS are defined; `evals/systems.py` only falls back to it. If the
+    resolved defaults ever moved, every cached baseline row would be quoting
+    numbers for a configuration the product no longer runs."""
+
+    def setUp(self):
+        # MODEL/EFFORT/BLOCK_WORDS are read once at import time, so a plain
+        # os.environ patch does nothing until the module runs again.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("EDITOR_AGENT_")}
+        patch = mock.patch.dict(os.environ, env, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(importlib.reload, settings_module)
+
+    def test_defaults_are_the_values_every_cached_row_was_paid_for(self):
+        importlib.reload(settings_module)
+        self.assertEqual(settings_module.MODEL, "deepseek-v4-flash")
+        self.assertEqual(settings_module.EFFORT, "minimal")
+        self.assertEqual(settings_module.BLOCK_WORDS, 50)
+
+    def test_editor_agent_env_vars_move_the_defaults(self):
+        os.environ["EDITOR_AGENT_MODEL"] = "other-model"
+        os.environ["EDITOR_AGENT_EFFORT"] = "high"
+        os.environ["EDITOR_AGENT_BLOCK_WORDS"] = "77"
+        importlib.reload(settings_module)
+        self.assertEqual(settings_module.MODEL, "other-model")
+        self.assertEqual(settings_module.EFFORT, "high")
+        self.assertEqual(settings_module.BLOCK_WORDS, 77)
+
+
+class EvalVarsOverrideSettings(unittest.TestCase):
+    """The harness caches paid baseline rows under the `EVAL_*` names, so
+    those names and their precedence over `corrector/settings.py` must stay
+    exactly what they were before the two were unified: an `EVAL_*` override
+    wins no matter what the product-side setting says."""
+
+    def setUp(self):
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith("EVAL_") and not k.startswith("EDITOR_AGENT_")
+        }
+        patch = mock.patch.dict(os.environ, env, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(importlib.reload, settings_module)
+        importlib.reload(settings_module)
+
+    def test_settings_default_flows_through_when_no_eval_var_is_set(self):
+        self.assertEqual(systems.BUILDERS["naive-deepseek"]().model, "deepseek-v4-flash")
+        self.assertEqual(systems.BUILDERS["corrector-blocks"]().block_words, 50)
+
+    def test_eval_var_wins_even_when_the_settings_default_disagrees(self):
+        # Move the settings-side default first, so a pass here can't be
+        # explained by the two happening to already agree.
+        os.environ["EDITOR_AGENT_MODEL"] = "settings-model"
+        os.environ["EDITOR_AGENT_EFFORT"] = "settings-effort"
+        os.environ["EDITOR_AGENT_BLOCK_WORDS"] = "9"
+        importlib.reload(settings_module)
+
+        os.environ["EVAL_DEEPSEEK_MODEL"] = "eval-model"
+        os.environ["EVAL_BLOCK_WORDS"] = "17"
+        built = systems.BUILDERS["corrector-blocks"]()
+        self.assertEqual(built.model, "eval-model")
+        self.assertEqual(built.block_words, 17)
 
 
 class FrozenRows(unittest.TestCase):

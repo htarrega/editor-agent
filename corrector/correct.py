@@ -98,7 +98,7 @@ def kinds_block():
     return "\n".join(f"  · {category}: {', '.join(kinds)}" for category, kinds in grouped.items())
 
 
-def render(text, spans=None):
+def render(text, spans=None, first=1):
     """Number the blocks, marker on its own line.
 
     Off to the side rather than inline because half of what this pass corrects
@@ -106,10 +106,13 @@ def render(text, spans=None):
     the model has been shown in a context the author never wrote.
 
     Where the blocks are cut is ``corrector/blocks.py``'s business; the default
-    is one block per line.
+    is one block per line. ``first`` is the number the first span in ``spans``
+    carries: per-block inference renders one span at a time and has to carry
+    its true position among the document's blocks, or every call would show
+    the model a lone ``[1]`` regardless of where the block really sits.
     """
     spans = block_spans(text) if spans is None else spans
-    return "\n\n".join(f"[{n}]\n{text[start:end]}" for n, (start, end) in enumerate(spans, 1))
+    return "\n\n".join(f"[{n}]\n{text[s:e]}" for n, (s, e) in enumerate(spans, first))
 
 
 def parse_edits(raw):
@@ -135,21 +138,45 @@ def parse_edits(raw):
 
 
 class Corrector:
-    """One pass over a text. The unit H5 will chunk a manuscript into."""
+    """One pass over a text. The unit H5 will chunk a manuscript into.
 
-    def __init__(self, model, generate, prompt=None, block_words=DEFAULT_BLOCK_WORDS):
+    ``blocks_per_call`` is opt-in and defaults to ``None``: with it unset,
+    ``correct`` is byte-identical to what H1 and H5 measured — every block in
+    one call for the whole document — because the frozen rows in docs/PLAN.md
+    depend on exactly that request shape. Set it to an integer to send that
+    many blocks per call instead, sequential for now; ``1`` is one call per
+    block. How the text is *numbered* (``block_words``) and how it is *split
+    across calls* are separate axes, and only the first of them has been
+    measured. See ``_correct_batched`` for what the second one costs.
+    """
+
+    def __init__(
+        self,
+        model,
+        generate,
+        prompt=None,
+        block_words=DEFAULT_BLOCK_WORDS,
+        blocks_per_call=None,
+    ):
         # `block_words=None` is one block per line, which is what H1 measured and
         # what the frozen reference rows in the harness ask for by name.
         self.model = model
         self.prompt = (prompt or PROMPT).format(kinds=kinds_block())
         self.block_words = block_words
+        self.blocks_per_call = blocks_per_call
         self._generate = generate
 
     def correct(self, text):
-        result = Correction()
         # Rendered and resolved from the same spans, so what the model was
         # numbered and what an anchor is searched inside cannot drift apart.
         spans = block_spans(text, self.block_words)
+        if self.blocks_per_call:
+            return self._correct_batched(text, spans, self.blocks_per_call)
+        return self._correct_whole(text, spans)
+
+    def _correct_whole(self, text, spans):
+        """Today's shape: every block in one prompt, one call for the document."""
+        result = Correction()
         started = time.monotonic()
         try:
             reply = self._generate(self.model, self.prompt, render(text, spans))
@@ -168,6 +195,69 @@ class Corrector:
         result.proposed = len(proposals) + malformed
         result.edits, result.rejected = _resolve(text, proposals, malformed, spans)
         result.skipped = sum(result.rejected.values())
+        return result
+
+    def _correct_batched(self, text, spans, size):
+        """``size`` blocks per call instead of the whole document in one.
+
+        Each batch is rendered carrying the true index of its first block
+        (``render(..., first=...)``), not the ``[1]`` it would get from being
+        numbered on its own — that numbering is what the prompt tells the model
+        a marker means, so it has to match the document. Resolution then runs
+        against the full ``spans`` list, exactly as the whole-document path
+        does: passing the batch alone would resolve a block index against a
+        numbering nobody was shown, and passing nothing at all would fall back
+        to one span per *line*.
+
+        A batch of one is the only case where the block a proposal belongs to
+        is known without asking: there the ``line`` is overwritten outright,
+        so the mapping cannot depend on the model echoing the marker back. With
+        more than one block in the call the number is the model's to choose, and
+        all this can do is refuse a number from outside the batch — dropping it
+        to ``None`` sends the anchor to the text-wide search rather than to some
+        other block's span.
+
+        A failing batch is recorded in ``errors`` and skipped; it does not
+        discard the other batches' edits. That makes ``errors`` mean something
+        different here than it does for ``_correct_whole``: there, any entry
+        means the pass returned nothing at all. Here it can hold anywhere from
+        one bad call up to every call, with real edits sitting alongside it.
+        ``len(result.errors)`` against ``result.usage.calls`` is how a caller
+        tells "one of many failed" from "all of them did".
+        """
+        result = Correction()
+        rejected = Counter()
+        for offset in range(0, len(spans), size):
+            batch = spans[offset : offset + size]
+            first = offset + 1
+            started = time.monotonic()
+            try:
+                reply = self._generate(self.model, self.prompt, render(text, batch, first=first))
+            except Exception as exc:
+                result.errors.append(f"{type(exc).__name__}: {exc}")
+                result.usage.add(Usage(calls=1, seconds=time.monotonic() - started))
+                continue
+
+            result.usage.add(spent(self.model, reply, time.monotonic() - started))
+            try:
+                proposals, malformed = parse_edits(reply.text)
+            except ValueError as exc:
+                result.errors.append(f"unparseable reply: {exc}")
+                continue
+
+            last = first + len(batch) - 1
+            for proposal in proposals:
+                if len(batch) == 1:
+                    proposal.line = first
+                elif proposal.line is None or not first <= proposal.line <= last:
+                    proposal.line = None
+            result.proposed += len(proposals) + malformed
+            edits, batch_rejected = _resolve(text, proposals, malformed, spans)
+            result.edits.extend(edits)
+            rejected.update(batch_rejected)
+
+        result.rejected = dict(rejected)
+        result.skipped = sum(rejected.values())
         return result
 
 

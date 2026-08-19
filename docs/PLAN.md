@@ -314,7 +314,8 @@ therefore worth validating in code rather than trusting to the prompt.
 
 ## H5 — Full manuscript
 
-> **Chunking is measured and it is in; latency is closed.** Both of the questions this
+> **Chunking is measured and it is in; splitting it across calls is measured and it is
+> out; latency is closed.** Both of the questions this
 > milestone inherited from H1 are answered below. What remains is the manuscript-scale
 > machinery: overlap, glossary, global consistency pass, final report.
 
@@ -394,6 +395,38 @@ row nobody has paid for and would need a name of its own.
 What has *not* been swept is `block_words` itself — 50 is the only value measured, chosen
 because it is the order of the paragraphs the model already handles well, not because it won
 a search.
+
+### Refuted: a block is a unit of numbering, not a unit of inference
+
+H5 left open whether a block should also be what a *call* covers. It should not.
+`blocks_per_call` sends N blocks per request instead of the whole document in one; the
+numbering is untouched, so the only thing that varies is how much text a single call sees.
+
+`--limit-words 300 --repeats 1` (`20260819-220556-smoke.json`):
+
+| system | blocks/call | P | R | F0.5 | FP/1k clean | calls | $ | wall |
+|---|---|---|---|---|---|---|---|---|
+| **corrector-blocks** | all | **0.943** | 0.817 | **0.915** | **0.00** | 8 | 0.0141 | 125 s |
+| corrector-batched | 10 | 0.887 | 0.878 | 0.886 | 0.49 | 28 | 0.0212 | 225 s |
+| corrector-per-block | 1 | 0.776 | 0.829 | 0.786 | 2.20 | 241 | 0.0647 | 560 s |
+
+Monotonic across all three points, and in the direction the prompt predicts: the rule that
+protects the author's voice — a rare word that is *coherente con el resto del texto* is his
+and stays — cannot be applied by a call that was never shown the rest of the text. Corpus B
+says it without ambiguity, 0 false positives becoming 9. Recall moves the other way and
+does not pay for it, because F0.5 weights precision twice and a false positive is what this
+product exists to avoid.
+
+The argument *for* splitting was robustness: one bad reply costing a block instead of the
+whole fragment. All three rows recorded **zero failed calls**, so the insurance covered
+nothing while costing 0.13 F0.5 and 4.6× the money. The truncation it was meant to survive
+already has its answer above — raise the cap.
+
+One draw at 300 words settles less than `--repeats 3` would. It is read as decisive anyway
+because three monotonic points are not an A/B that can flip, the effect is large, and
+corpus B does not depend on the corruptor: every edit there is a false positive by
+definition. `blocks_per_call` stays registered as `corrector-batched` and
+`corrector-per-block` so the result is reproducible, not because either is a candidate.
 
 ### Decision: the harness runs its calls concurrently
 
