@@ -4,6 +4,7 @@
 python -m evals.run                       # 4 systems, corpora A and B
 python -m evals.run --systems null,languagetool
 python -m evals.run --repeats 4           # N corrupted versions per fragment
+python -m evals.run --concurrency 6       # calls in flight per system (default 4)
 python -m evals.run --limit-words 300     # cheap smoke run
 python -m evals.run --reuse               # only what has no cached numbers is called
 python -m evals.run --reuse --fresh corrector-v0   # ...but never cache the one being built
@@ -24,6 +25,22 @@ each system's numbers from earlier reports and calls only the systems that have 
 python -m evals.run --reuse                       # scan --out, newest report first
 python -m evals.run --reuse evals/results/20260817-230537-claude-final.json
 ```
+
+## Running the calls concurrently
+
+The calls a system makes are independent, so `--concurrency` puts several in flight at once.
+Results are collected **in input order** — the scores, the false-positive samples and the
+per-edit record are all appended in corpus order, so two runs of one corpus have to write the
+same report. A system that paces itself against a rate limit pins its own ceiling with a
+`concurrency` attribute, as `languagetool` does.
+
+The `seg` column keeps summing each call's own duration, so it measures latency per call and
+does not move when calls overlap; `wall_seconds` in the report is the elapsed time and is the
+number that shows a speedup.
+
+This is what makes `--repeats` affordable, and `--repeats` is what makes a comparison
+between two systems mean anything — a single run of this harness is a draw, not a
+measurement.
 
 Reused rows are marked `↺ caché` in the table and carry `reused_from` in the report.
 Their cost and seconds columns are what the original run paid, not this one.

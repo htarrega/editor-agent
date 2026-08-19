@@ -107,6 +107,10 @@ class LanguageToolSystem:
     """Rule-based baseline. Not an LLM, and that is the point."""
 
     name = "languagetool"
+    # The endpoint allows 20 requests a minute and this system already paces
+    # itself against that between chunks. Overlapping its calls would spend the
+    # allowance faster, not finish sooner.
+    concurrency = 1
 
     def __init__(self, endpoint=None):
         self.endpoint = endpoint or os.environ.get(

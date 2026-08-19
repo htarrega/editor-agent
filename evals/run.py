@@ -10,7 +10,9 @@ import datetime
 import json
 import pathlib
 import sys
+import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel
 
@@ -70,7 +72,13 @@ def main(argv=None):
         if name in cached:
             result = cached[name]
         else:
-            result = evaluate(live[name], fragments, cases, skip_clean=args.skip_clean)
+            result = evaluate(
+                live[name],
+                fragments,
+                cases,
+                skip_clean=args.skip_clean,
+                concurrency=args.concurrency,
+            )
         report["systems"][name] = result
         print(summary_row(name, result))
         write_report(report, path)
@@ -99,6 +107,13 @@ def parse_args(argv):
     parser.add_argument("--out", type=pathlib.Path, default=RESULTS_DIR)
     parser.add_argument("--tag", default="", help="suffix for the report filename")
     parser.add_argument("--skip-clean", action="store_true", help="skip corpus B")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="calls in flight per system; the calls are independent, and a system "
+        "that paces itself (languagetool) holds to its own limit regardless",
+    )
     parser.add_argument(
         "--fresh",
         type=comma_list,
@@ -138,15 +153,36 @@ def build_cases(fragments, args):
     return cases
 
 
-def evaluate(system, fragments, cases, skip_clean=False):
+def correct_all(system, texts, concurrency):
+    """``system.correct`` over every text, results in input order.
+
+    The calls are independent — that is what makes this safe at all — but what
+    happens to their results is not: scores, false-positive samples and the
+    per-edit record are all appended in corpus order, so the answers have to
+    come back in the order they went out. Otherwise two runs of one corpus
+    would write two different reports and neither would be wrong.
+
+    A system may pin its own ceiling with a ``concurrency`` attribute.
+    LanguageTool does: it paces itself against a requests-per-minute limit, and
+    firing its chunks at once would defeat the pacing rather than outrun it.
+    """
+    limit = max(1, min(concurrency, getattr(system, "concurrency", concurrency)))
+    if limit == 1:
+        return [system.correct(text) for text in texts]
+    with ThreadPoolExecutor(max_workers=limit) as pool:
+        return list(pool.map(system.correct, texts))
+
+
+def evaluate(system, fragments, cases, skip_clean=False, concurrency=1):
+    started = time.monotonic()
     usage = systems.Usage()
     score = metrics.Score()
     errors, skipped = [], 0
     rejected = Counter()
     detail = []
 
-    for case in cases:
-        out = system.correct(case.text)
+    outputs = correct_all(system, [case.text for case in cases], concurrency)
+    for case, out in zip(cases, outputs, strict=True):
         usage.add(out.usage)
         errors.extend(f"{case.name}: {e}" for e in out.errors)
         skipped += out.skipped
@@ -159,7 +195,9 @@ def evaluate(system, fragments, cases, skip_clean=False):
 
     clean = CleanResult()
     if not skip_clean:
-        clean, clean_usage, clean_errors, clean_rejected = evaluate_clean(system, fragments)
+        clean, clean_usage, clean_errors, clean_rejected = evaluate_clean(
+            system, fragments, concurrency
+        )
         usage.add(clean_usage)
         errors.extend(clean_errors)
         rejected.update(clean_rejected)
@@ -169,6 +207,10 @@ def evaluate(system, fragments, cases, skip_clean=False):
         "by_kind": {kind: t.model_dump() for kind, t in sorted(score.by_kind.items())},
         "clean": clean.model_dump(),
         "usage": usage.model_dump(),
+        # `usage.seconds` sums each call's own duration, so it measures latency
+        # per call and does not move when calls overlap. Elapsed time does, and
+        # it is the only number that says whether a run got faster.
+        "wall_seconds": time.monotonic() - started,
         "unactionable": skipped,
         # Why a proposal never became an edit. ARCHITECTURE §4 requires the
         # discards to be logged, not merely counted: a run where the anchors
@@ -190,15 +232,15 @@ def evaluate(system, fragments, cases, skip_clean=False):
     }
 
 
-def evaluate_clean(system, fragments):
+def evaluate_clean(system, fragments, concurrency=1):
     """Run the systems over untouched text. Returns the result, its cost, its
     errors and its discards, so the caller decides what to do with each."""
     usage, errors = systems.Usage(), []
     result = CleanResult()
     distances, by_kind, rejected = [], Counter(), Counter()
 
-    for fragment in fragments:
-        out = system.correct(fragment.text)
+    outputs = correct_all(system, [fragment.text for fragment in fragments], concurrency)
+    for fragment, out in zip(fragments, outputs, strict=True):
         usage.add(out.usage)
         errors.extend(f"{fragment.name} (limpio): {e}" for e in out.errors)
         rejected.update(out.rejected)

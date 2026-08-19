@@ -3,10 +3,11 @@ import io
 import json
 import pathlib
 import tempfile
+import time
 import unittest
 from unittest import mock
 
-from evals import run
+from evals import run, systems
 from evals.dataset import Fragment
 
 
@@ -117,3 +118,37 @@ class Diagnostics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Concurrency(unittest.TestCase):
+    """Overlapping the calls must not change what the report says."""
+
+    class Slow:
+        """Answers in reverse order of arrival, so order cannot come out right by luck."""
+
+        def __init__(self, concurrency=None):
+            if concurrency is not None:
+                self.concurrency = concurrency
+            self.seen = []
+
+        def correct(self, text):
+            time.sleep(0.05 * (1 if text == "a" else 0))
+            self.seen.append(text)
+            return systems.Output(edits=[], usage=systems.Usage(calls=1))
+
+    def test_results_come_back_in_the_order_they_went_out(self):
+        system = self.Slow()
+        out = run.correct_all(system, ["a", "b", "c"], concurrency=3)
+        # The slow one finished last and still holds the first slot.
+        self.assertEqual(system.seen[0], "b")
+        self.assertEqual(len(out), 3)
+
+    def test_a_system_holds_to_its_own_ceiling(self):
+        system = self.Slow(concurrency=1)
+        with mock.patch("evals.run.ThreadPoolExecutor") as pool:
+            run.correct_all(system, ["a", "b"], concurrency=8)
+        pool.assert_not_called()
+        self.assertEqual(system.seen, ["a", "b"])
+
+    def test_languagetool_pins_itself_serial(self):
+        self.assertEqual(systems.LanguageToolSystem.concurrency, 1)
