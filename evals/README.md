@@ -8,7 +8,7 @@ python -m evals.run --concurrency 6       # calls in flight per system (default 
 python -m evals.run --limit-words 300     # cheap smoke run
 python -m evals.run --reuse               # only what has no cached numbers is called
 python -m evals.run --reuse --fresh corrector-blocks   # ...but never cache the one being built
-python -m unittest discover -s evals/tests -t .
+python -m unittest discover -s tests -t .
 ```
 
 It prints a table and writes `evals/results/<timestamp>.json` with the full detail,

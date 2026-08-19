@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -e ".[dev]"
+
+      - name: ruff format
+        run: ruff format --check .
+
+      - name: ruff check
+        run: ruff check .
+
+      # No provider keys and no corpus: `evals/corpus/` is outside the
+      # repository (docs/PLAN.md, H0), so every test here runs offline against
+      # fixtures. A test that needs a paid call does not belong in this suite.
+      - name: unittest
+        run: python -m unittest discover -s tests -t .

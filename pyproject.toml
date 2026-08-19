@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "editor-agent"
+version = "0.1.0"
+description = "An autonomous text correction agent for literary Spanish"
+requires-python = ">=3.12"
+
+# What the pipeline itself needs. `corrector/` is the product and is what an
+# API or a Drive integration would import.
+#
+# httpx is here even though only `evals/systems.py` imports it by name: it is
+# the transport underneath both provider SDKs, which pin it no tighter than
+# `>=0.25,<1`. Leaving it to them would let the version float in a deployment
+# that the old requirements.txt pinned exactly, and the provider call is the
+# one thing in this repo that costs money when it misbehaves.
+dependencies = [
+    "openai==2.53.0",
+    "anthropic==0.122.0",
+    "httpx==0.28.1",
+    "pydantic==2.13.4",
+]
+
+[project.optional-dependencies]
+dev = ["ruff==0.16.3"]
+
+[tool.setuptools]
+# Listed rather than auto-discovered: `tests/` is not a package to install, and
+# flat-layout discovery would either pick it up or refuse to guess.
+packages = ["corrector", "evals"]
+
+[tool.ruff]
+# 100 columns, not the default 88: the prose in this codebase's comments and
+# docstrings carries as much of the argument as the code does, and 88 breaks
+# the tables and the pipeline diagram it explains.
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F is pyflakes plus pycodestyle, I is import order — the one thing a
+# formatter alone leaves to habit.
+select = ["E", "F", "I"]

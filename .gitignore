@@ -6,3 +6,8 @@ test_texts/
 evals/corpus/
 evals/results/
 .ruff_cache/
+
+# build artefacts of the editable install (pyproject.toml)
+*.egg-info/
+build/
+dist/
