@@ -25,6 +25,11 @@ export DEEPSEEK_API_KEY=...      # the corrector's workhorse
 export ANTHROPIC_API_KEY=...     # strong-model baseline
 ```
 
+`corrector/settings.py` holds the three knobs the pipeline reads — `EDITOR_AGENT_MODEL`,
+`EDITOR_AGENT_EFFORT`, `EDITOR_AGENT_BLOCK_WORDS`. The harness's `EVAL_*` variables still
+win where they are set, and fall back to these, so both sides cannot drift onto different
+configurations without anyone noticing.
+
 **A fresh clone cannot run the harness yet.** The corpus is deliberately not in the
 repository — it is the author's own prose, and the reports quote it back (`docs/PLAN.md`,
 H0). Drop one or more clean `.txt` files into `evals/corpus/` first; without them
@@ -57,13 +62,33 @@ which is why `--reuse` exists. One run is a draw from a distribution rather than
 measurement — use `--repeats 3` before believing a comparison. The flags are documented in
 [`evals/README.md`](evals/README.md).
 
+## API
+
+A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY`; it never writes the file.
+
+```bash
+uvicorn api.main:app
+curl -X POST localhost:8000/correct-file \
+  -H 'Content-Type: application/json' \
+  -d '{"file_path": "evals/corpus/carta.txt"}'
+```
+
+The body carries the corrected text and what was proposed, applied and rejected. A pass
+whose every call failed answers `502` instead of handing the original text back with a
+`200` that would be indistinguishable from "no errors found"; a pass that lost only some of
+its calls returns what the rest produced, with the failures in `errors`.
+
+**`file_path` is not restricted to any root.** Any file the server process can read is
+readable through the endpoint, so keep it on `127.0.0.1` until that is settled.
+
 ## Layout
 
 | package | what it is |
 |---|---|
 | `corrector/` | the pipeline — the product. Imports nothing from `evals/` |
 | `evals/` | the harness that measures it |
-| `tests/` | `tests/test_corrector/` and `tests/test_evals/`, mirroring the two |
+| `api/` | the HTTP wrapper over the pipeline |
+| `tests/` | `tests/test_corrector/`, `tests/test_evals/` and `tests/test_api/`, mirroring the three |
 
 Installing the project is what makes `corrector` importable from outside the repository
 root. The test directories carry a `test_` prefix so that neither can ever shadow the
