@@ -116,10 +116,6 @@ class Diagnostics(unittest.TestCase):
         self.assertIsNone(run.offschema_line(rows))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Concurrency(unittest.TestCase):
     """Overlapping the calls must not change what the report says."""
 
@@ -134,14 +130,21 @@ class Concurrency(unittest.TestCase):
         def correct(self, text):
             time.sleep(0.05 * (1 if text == "a" else 0))
             self.seen.append(text)
-            return systems.Output(edits=[], usage=systems.Usage(calls=1))
+            # `input_tokens` carries which text produced this row, so the order
+            # of the results can be read back rather than assumed.
+            return systems.Output(
+                edits=[], usage=systems.Usage(calls=1, input_tokens=ord(text))
+            )
 
     def test_results_come_back_in_the_order_they_went_out(self):
         system = self.Slow()
         out = run.correct_all(system, ["a", "b", "c"], concurrency=3)
-        # The slow one finished last and still holds the first slot.
-        self.assertEqual(system.seen[0], "b")
-        self.assertEqual(len(out), 3)
+        # The slow one finished last and still holds the first slot. Which of the
+        # two fast ones got there first is the scheduler's business, so only "a"
+        # finishing last is asserted — the property under test is the order of
+        # `out`, which is what the report is written from.
+        self.assertEqual(system.seen[-1], "a")
+        self.assertEqual([chr(row.usage.input_tokens) for row in out], ["a", "b", "c"])
 
     def test_a_system_holds_to_its_own_ceiling(self):
         system = self.Slow(concurrency=1)
@@ -152,3 +155,7 @@ class Concurrency(unittest.TestCase):
 
     def test_languagetool_pins_itself_serial(self):
         self.assertEqual(systems.LanguageToolSystem.concurrency, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
