@@ -3,14 +3,23 @@
 General rule: no corrector milestone is closed without numbers from the evaluation harness
 (hence the eval comes first). Every milestone is small and leaves something usable.
 
-## H0 — Evaluation harness (the scientific base)
+Every number in this document was produced by a specific prompt on a specific model with a
+specific block numbering, and `reuse.incompatible` compares none of the three — so a reword
+would have been reused in silence and the tables would have gone on looking unchanged.
+`FrozenRows` in `tests/test_evals/test_systems.py` now pins the model and a hash of the
+prompt for the five rows that have them, on both sides of H1's prompt-against-model square.
+Moving one is a decision that starts with re-measuring, not a refactor.
+
+## H0 — Evaluation harness (the scientific base) — **done**
 - Typed-error corruptor (accents, agreement, dequeísmo, laísmo, dialogue punctuation,
-  quotes, capitalization...).
+  quotes, capitalization...). → 17 rules in `evals/corruptor.py`, one per taxonomy type.
 - A/B corpus: 3–5 clean literary fragments (~2k words each), a corrupted version and an
-  untouched version.
+  untouched version. → 4 fragments, 8254 words.
 - Metrics: precision/recall/F0.5 per type, false-positive rate, basic stylometry.
-- Measured baselines: LanguageTool + a naive prompt to a strong model.
+  → `evals/metrics.py`, with cluster matching so a split or merged correction still counts.
+- Measured baselines: LanguageTool + a naive prompt to a strong model. → the table below.
 - **Done when**: `python -m evals.run` prints a metrics table + the cost of the run.
+  → **it does**, and every run writes the full detail to `evals/results/<timestamp>.json`.
 
 ### Decisions taken in H0
 
@@ -309,9 +318,15 @@ therefore worth validating in code rather than trusting to the prompt.
 > milestone inherited from H1 are answered below. What remains is the manuscript-scale
 > machinery: overlap, glossary, global consistency pass, final report.
 
-- Chunking with overlap, name glossary, global consistency pass, final report (corrected
-  document + list of applied corrections and suggestions with a diff).
-- **Done when**: it processes a 30–50k-word text end to end with no intervention.
+- Chunking — **done**, without overlap: `corrector/blocks.py` cuts an over-long paragraph
+  at its own sentence boundaries, and the blocks abut rather than overlap. Measured below.
+- Concurrent calls — **done**, `evals/run.py:correct_all`. Recorded below; it is what makes
+  `--repeats` affordable, and `--repeats` is what makes a comparison mean anything.
+- Name glossary, global consistency pass, final report (corrected document + list of applied
+  corrections and suggestions with a diff) — **pending**. Overlap belongs here too: what is
+  done is cutting inside one call, not carrying context across two.
+- **Done when**: it processes a 30–50k-word text end to end with no intervention. → **not
+  yet**; there is no document-level pass, so nothing above ~2k words runs end to end.
 
 ### Result: chunking raises the floor, and the floor is what matters
 
