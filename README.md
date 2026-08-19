@@ -19,7 +19,7 @@ export ANTHROPIC_API_KEY=...     # strong-model baseline
 
 python -m evals.run              # metrics table + cost of the run
 python -m evals.run --reuse      # ...reusing cached baselines, calling only what is new
-python -m evals.run --reuse --fresh corrector-v0   # ...never caching the one being built
+python -m evals.run --reuse --fresh corrector-blocks   # ...never caching the one being built
 python -m unittest discover -s evals/tests -t .
 
 ruff format . && ruff check .    # formatting and import order

@@ -7,7 +7,7 @@ python -m evals.run --repeats 4           # N corrupted versions per fragment
 python -m evals.run --concurrency 6       # calls in flight per system (default 4)
 python -m evals.run --limit-words 300     # cheap smoke run
 python -m evals.run --reuse               # only what has no cached numbers is called
-python -m evals.run --reuse --fresh corrector-v0   # ...but never cache the one being built
+python -m evals.run --reuse --fresh corrector-blocks   # ...but never cache the one being built
 python -m unittest discover -s evals/tests -t .
 ```
 
@@ -84,7 +84,7 @@ false positive when a system correctly spots it.
 | `run.py` | CLI, table and report |
 
 The systems themselves: `null` and `languagetool` and the naive prompts are baselines
-and live in `systems.py`; `corrector-v0` is the pipeline, and lives in `corrector/`
+and live in `systems.py`; `corrector-blocks` is the pipeline, and lives in `corrector/`
 (`correct.py` for the pass, `llm.py` for the providers and the prices).
 `corrector-claude` is the same pass on the strong model — not a baseline, a way of
 telling apart what the prompt contributes from what the model does.

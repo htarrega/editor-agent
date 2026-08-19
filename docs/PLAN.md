@@ -364,6 +364,12 @@ entirely — errors inside one call share a single deliberation, so the effectiv
 nearer 12 calls than 495 errors. Read p = 0.004 as optimistic; the floor-raising table does
 not rest on that assumption and is the conservative reading.
 
+`corrector-blocks` is therefore the default in `DEFAULT_SYSTEMS`, and `corrector-v0` is
+frozen at what H1 measured: its numbers are quoted throughout this document and cached in
+past reports, so changing it would make those rows stop meaning what they say. What has
+*not* been swept is `block_words` itself — 50 is the only value measured, chosen because it
+is the order of the paragraphs the model already handles well, not because it won a search.
+
 ### Decision: the harness runs its calls concurrently
 
 `evals/run.py:correct_all` maps `system.correct` over the texts through a thread pool, sized

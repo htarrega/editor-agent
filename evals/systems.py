@@ -275,6 +275,10 @@ BUILDERS = {
     "naive-claude": lambda: NaivePromptSystem(
         "naive-claude", os.environ.get("EVAL_CLAUDE_MODEL", "claude-sonnet-5"), claude_generate
     ),
+    # The row H1 closed on, kept exactly as it was measured. It is no longer
+    # the system under development — `corrector-blocks` is — but its numbers are
+    # quoted throughout docs/PLAN.md and cached in past reports, so nothing here
+    # may change or those rows stop meaning what they say.
     "corrector-v0": lambda: CorrectorSystem(
         "corrector-v0",
         Corrector(
@@ -282,11 +286,13 @@ BUILDERS = {
             bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
         ),
     ),
-    # `corrector-v0` with the paragraphs re-cut into blocks the size of the
-    # ones the model already handles well. H1 found its whole recall deficit in
-    # the single fragment averaging 220 words per paragraph (0.636 against
-    # 0.926 on the rest), so this row holds the model, the effort and the
-    # prompt fixed and changes only how the same characters are numbered.
+    # The corrector under development, and the default. `corrector-v0` with the
+    # paragraphs re-cut into blocks the size of the ones the model already
+    # handles well: same model, same effort, same prompt, only a different
+    # numbering of the same characters. Over `--repeats 3` it takes F0.5 from
+    # 0.926 to 0.948 and recall from 0.820 to 0.875, and it earns the default by
+    # raising the floor rather than the ceiling — on the fragment with 245-word
+    # paragraphs the worst draw goes from 0.455 to 0.705 (docs/PLAN.md, H5).
     "corrector-blocks": lambda: CorrectorSystem(
         "corrector-blocks",
         Corrector(
@@ -309,7 +315,7 @@ BUILDERS = {
 # default set: they are the two off-diagonal cells of the prompt × model square,
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
-DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-v0"]
+DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-blocks"]
 
 
 def build(names):
