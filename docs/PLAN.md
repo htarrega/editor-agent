@@ -314,9 +314,9 @@ therefore worth validating in code rather than trusting to the prompt.
 
 ## H5 — Full manuscript
 
-> **Chunking is measured and it is in; splitting it across calls is measured and it is
-> out; latency is closed.** Both of the questions this
-> milestone inherited from H1 are answered below. What remains is the manuscript-scale
+> **Chunking is measured and it is in; splitting it across calls is measured and it is out;
+> latency is closed.** Both of the questions this milestone inherited from H1 are answered
+> below, and so is the one the answer to them raised. What remains is the manuscript-scale
 > machinery: overlap, glossary, global consistency pass, final report.
 
 - Chunking — **done**, without overlap: `corrector/blocks.py` cuts an over-long paragraph
@@ -461,6 +461,22 @@ A run that moves it is measuring something else, so `MAX_OUTPUT_TOKENS` reads
 Both SDKs already retried twice on 429s and 5xx; that is now pinned explicitly at 3 rather
 than inherited from a default that can move under an upgrade, because a failed call is not a
 bad score — it is a fragment dropped from the false-positive rate.
+
+## Interfaces
+
+**HTTP — partly done.** `api/main.py` exposes `POST /correct-file`: a path in, the corrected
+text and the proposed/applied/rejected counts out. It never writes the file. A pass whose
+every call failed answers 502, because returning the original text with a 200 reads as "this
+text is clean" — the confusion `parse_edits` already refuses to make. A pass that lost only
+some of its calls returns what the rest produced.
+
+**Blocked on one decision before it can leave `127.0.0.1`**: `file_path` is not restricted to
+any root, so every file the process can read is readable through the endpoint. The remedy is
+a contract choice — an allow-list, the content in the request body instead of a path, or
+auth — and not a patch.
+
+It carries no document-level pass of its own, so it inherits H5's ceiling: nothing above
+~2k words runs end to end.
 
 ## H6 — Google Drive
 - Read a document from Drive, write the corrected version + the report (Docs with
