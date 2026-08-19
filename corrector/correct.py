@@ -19,6 +19,7 @@ from collections import Counter
 
 from pydantic import BaseModel, ValidationError
 
+from corrector.blocks import block_spans
 from corrector.edits import Edit, ProposedEdit, resolve_edits, trim
 from corrector.llm import Usage, spent
 from corrector.taxonomy import ERROR_TYPES
@@ -97,17 +98,18 @@ def kinds_block():
     return "\n".join(f"  · {category}: {', '.join(kinds)}" for category, kinds in grouped.items())
 
 
-def render(text):
-    """Number the lines, marker on its own line.
+def render(text, spans=None):
+    """Number the blocks, marker on its own line.
 
     Off to the side rather than inline because half of what this pass corrects
     is orthotypography, and a dialogue dash judged as «12| —Vamos» is a dash
     the model has been shown in a context the author never wrote.
+
+    Where the blocks are cut is ``corrector/blocks.py``'s business; the default
+    is one block per line.
     """
-    lines = text.split("\n")
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n\n".join(f"[{n}]\n{line}" for n, line in enumerate(lines, 1))
+    spans = block_spans(text) if spans is None else spans
+    return "\n\n".join(f"[{n}]\n{text[start:end]}" for n, (start, end) in enumerate(spans, 1))
 
 
 def parse_edits(raw):
@@ -135,16 +137,20 @@ def parse_edits(raw):
 class Corrector:
     """One pass over a text. The unit H2 will wrap in a verifier."""
 
-    def __init__(self, model, generate, prompt=None):
+    def __init__(self, model, generate, prompt=None, block_words=None):
         self.model = model
         self.prompt = (prompt or PROMPT).format(kinds=kinds_block())
+        self.block_words = block_words
         self._generate = generate
 
     def correct(self, text):
         result = Correction()
+        # Rendered and resolved from the same spans, so what the model was
+        # numbered and what an anchor is searched inside cannot drift apart.
+        spans = block_spans(text, self.block_words)
         started = time.monotonic()
         try:
-            reply = self._generate(self.model, self.prompt, render(text))
+            reply = self._generate(self.model, self.prompt, render(text, spans))
         except Exception as exc:
             result.errors.append(f"{type(exc).__name__}: {exc}")
             result.usage = Usage(calls=1, seconds=time.monotonic() - started)
@@ -158,18 +164,18 @@ class Corrector:
             return result
 
         result.proposed = len(proposals) + malformed
-        result.edits, result.rejected = _resolve(text, proposals, malformed)
+        result.edits, result.rejected = _resolve(text, proposals, malformed, spans)
         result.skipped = sum(result.rejected.values())
         return result
 
 
-def _resolve(text, proposals, malformed):
+def _resolve(text, proposals, malformed, spans=None):
     """Anchors to offsets. Every proposal that does not survive is counted."""
     rejected = Counter()
     if malformed:
         rejected["malformed"] = malformed
 
-    edits, discarded = resolve_edits(text, proposals)
+    edits, discarded = resolve_edits(text, proposals, spans)
     rejected.update(rejection.reason for rejection in discarded)
 
     kept = []

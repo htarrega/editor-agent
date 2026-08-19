@@ -237,6 +237,10 @@ class CorrectorSystem:
     def prompt(self):
         return self.corrector.prompt
 
+    @property
+    def block_words(self):
+        return self.corrector.block_words
+
     def correct(self, text):
         result = self.corrector.correct(text)
         return Output(
@@ -272,6 +276,19 @@ BUILDERS = {
         Corrector(
             os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
             bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
+        ),
+    ),
+    # `corrector-v0` with the paragraphs re-cut into blocks the size of the
+    # ones the model already handles well. H1 found its whole recall deficit in
+    # the single fragment averaging 220 words per paragraph (0.636 against
+    # 0.926 on the rest), so this row holds the model, the effort and the
+    # prompt fixed and changes only how the same characters are numbered.
+    "corrector-blocks": lambda: CorrectorSystem(
+        "corrector-blocks",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", "minimal")),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", "50")),
         ),
     ),
     # The same pass on the strong model. Not a baseline and not the target

@@ -184,6 +184,9 @@ def evaluate(system, fragments, cases, skip_clean=False):
         # baseline's prompt changes what its numbers mean.
         "model": getattr(system, "model", ""),
         "prompt": getattr(system, "prompt", ""),
+        # How the text was cut into the numbered blocks the model saw. Same
+        # reason as the prompt: change it and the row means something else.
+        "block_words": getattr(system, "block_words", None),
     }
 
 

@@ -58,7 +58,7 @@ def line_spans(text):
     return spans
 
 
-def resolve_edits(text, proposals):
+def resolve_edits(text, proposals, spans=None):
     """Turn anchored proposals into offset edits.
 
     An anchor that is missing or appears more than once is ambiguous, so the
@@ -67,9 +67,13 @@ def resolve_edits(text, proposals):
     line is only a hint, never a claim to verify — an anchor that is unique in
     the whole text is unambiguous whatever line the model thought it was on,
     so a miss inside the line falls back to the text-wide search.
+
+    ``spans`` are the blocks the model was shown, numbered as it saw them; a
+    caller that renumbered the text has to hand the same spans back here, or a
+    «line» would be resolved against a numbering nobody was given.
     """
     edits, rejected = [], []
-    spans = line_spans(text)
+    spans = line_spans(text) if spans is None else spans
     for proposal in proposals:
         hits = _within_line(text, proposal, spans) or _find_all(text, proposal.original)
         if not hits:
