@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 
 from corrector.edits import apply_edits
+from corrector.llm import MAX_OUTPUT_TOKENS, MAX_RETRIES
 from corrector.taxonomy import ERROR_TYPES
 from evals import corruptor, metrics, reuse, systems
 from evals.dataset import load_fragments
@@ -45,7 +46,15 @@ def main(argv=None):
     cases = build_cases(fragments, args)
 
     report = {
-        "config": vars(args) | {"fragments": [f.name for f in fragments]},
+        # The token cap goes in with the corpus because a call that ran into
+        # it did not answer at all: a row measured under one cap and a row
+        # measured under another are not the same measurement.
+        "config": vars(args)
+        | {
+            "fragments": [f.name for f in fragments],
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
+            "max_retries": MAX_RETRIES,
+        },
         "corpus": summarise_corpus(cases),
         "systems": {},
     }

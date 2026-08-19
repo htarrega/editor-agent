@@ -18,7 +18,18 @@ PRICING = {
     "claude-haiku-4-5": (1.00, 5.00),
 }
 
-MAX_OUTPUT_TOKENS = 32000
+# What a call may spend, deliberation included. Raised for one run with
+# `EVAL_MAX_OUTPUT_TOKENS`: the cap is what a truncated call ran into, so a run
+# that moves it is measuring something else, and `evals.run` records the value
+# it used alongside the corpus.
+MAX_OUTPUT_TOKENS = int(os.environ.get("EVAL_MAX_OUTPUT_TOKENS", "32000"))
+
+# Both SDKs retry 429s and 5xx on their own, twice, with backoff. Pinned here
+# rather than left to the default because a failed call is not a bad score, it
+# is a fragment dropped from the false-positive rate — so how many transient
+# failures survive is part of what a report means, and it should not change
+# quietly under an SDK upgrade.
+MAX_RETRIES = int(os.environ.get("EVAL_MAX_RETRIES", "3"))
 
 
 class Reply(BaseModel):
@@ -77,7 +88,11 @@ def deepseek_generate(model, system, user, reasoning_effort=None):
     # Imported here so the offline systems run without the provider SDKs.
     from openai import OpenAI
 
-    client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
+    client = OpenAI(
+        api_key=os.environ["DEEPSEEK_API_KEY"],
+        base_url="https://api.deepseek.com",
+        max_retries=MAX_RETRIES,
+    )
     # Omitted rather than defaulted: the naive baseline's numbers are cached
     # and reused, and they were paid for by a request without this field.
     effort = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
@@ -119,7 +134,7 @@ def bounded_deepseek(effort):
 def claude_generate(model, system, user):
     import anthropic
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(max_retries=MAX_RETRIES)
     extra = {"system": system} if system else {}
     with client.messages.stream(
         model=model,
