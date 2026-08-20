@@ -327,7 +327,8 @@ therefore worth validating in code rather than trusting to the prompt.
   corrections and suggestions with a diff) — **pending**. Overlap belongs here too: what is
   done is cutting inside one call, not carrying context across two.
 - **Done when**: it processes a 30–50k-word text end to end with no intervention. → **not
-  yet**; there is no document-level pass, so nothing above ~2k words runs end to end.
+  yet**; there is no document-level pass. One call holds far more than the fragments it was
+  measured on — the ceiling is below.
 
 ### Result: chunking raises the floor, and the floor is what matters
 
@@ -461,6 +462,40 @@ A run that moves it is measuring something else, so `MAX_OUTPUT_TOKENS` reads
 Both SDKs already retried twice on 429s and 5xx; that is now pinned explicitly at 3 rather
 than inherited from a default that can move under an upgrade, because a failed call is not a
 bad score — it is a fragment dropped from the false-positive rate.
+
+### Finding: what bounds one call is output demand, and the corpus is too small to see it
+
+The chunk H5's machinery gets built on is whatever one call can hold, so the call was grown
+until it broke. At `EVAL_MAX_OUTPUT_TOKENS=64000`, on distinct prose:
+
+| words | input tok | output tok | s | output per 1k words |
+|---|---|---|---|---|
+| 8,254 | 14,777 | 23,551 | 144 | 2,853 |
+| 16,508 | 28,650 | 44,562 | 247 | 2,699 |
+| 24,762 | 42,564 | 51,782 | 268 | 2,091 |
+
+Output demand scales with the text at roughly **2,700 tokens per 1,000 words**, and it is the
+side that binds — the input is a third of it. The cap therefore sets the chunk: ~12,000 words
+before `32,000` truncates, ~24,000 before `64,000` does.
+
+**This narrows the finding above rather than repeating it.** «~10,000 output tokens per call»
+was measured on 2k-word fragments; at manuscript scale one call wants five times that, and
+16,508 words already asks for 44,562 — past today's default. The cap is insurance against a
+bad draw at fragment scale and a hard ceiling at manuscript scale, and the two are not the
+same claim. A 50k-word manuscript is 5–6 calls at the current cap, or 3 at 64,000: few enough
+that the seams stay countable, which is what the refutation above asks for.
+
+**Repeated text cannot measure scale.** The corpus stops at 8,254 words, so the first attempt
+grew the document by repeating it — and the model recognises the repetition and coasts. At
+24,762 words of tripled corpus it returned **120 output tokens in 3 seconds**, against 51,782
+in 268 for the same word count of distinct prose. That reads exactly like a ceiling and is
+not one; it is the measurement instrument failing, and it would have set the chunk size an
+order of magnitude too small. The distinct text was generated for this, one passage per
+premise, and is not the author's prose: enough to measure how hard the model works, not to
+score precision on.
+
+The reasoning lottery survives at this scale — 25,790 words drew 15,067 output tokens against
+51,782 for 24,762 — so the slope is the finding and the individual points are not.
 
 ## Interfaces
 
