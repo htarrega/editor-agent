@@ -132,9 +132,7 @@ class Concurrency(unittest.TestCase):
             self.seen.append(text)
             # `input_tokens` carries which text produced this row, so the order
             # of the results can be read back rather than assumed.
-            return systems.Output(
-                edits=[], usage=systems.Usage(calls=1, input_tokens=ord(text))
-            )
+            return systems.Output(edits=[], usage=systems.Usage(calls=1, input_tokens=ord(text)))
 
     def test_results_come_back_in_the_order_they_went_out(self):
         system = self.Slow()
