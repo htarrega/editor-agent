@@ -3,7 +3,7 @@
 An autonomous text correction agent, with access to local files and Google Drive.
 
 - Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Milestones and state: [`docs/PLAN.md`](docs/PLAN.md)
+- Milestones and state: [`docs/PLAN.md`](docs/PLAN.md) — start at «Where to pick this up»
 - Evaluation harness: [`evals/README.md`](evals/README.md)
 
 ## Install

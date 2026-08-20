@@ -10,6 +10,35 @@ would have been reused in silence and the tables would have gone on looking unch
 prompt for the five rows that have them, on both sides of H1's prompt-against-model square.
 Moving one is a decision that starts with re-measuring, not a refactor.
 
+## Where to pick this up
+
+Read this before starting work; it is the only part of the document that goes stale.
+
+**Next, and it is a measurement.** `blocks_per_call` exists and is registered
+(`evals/systems.py`). Blocks run ~39 words, so **`blocks_per_call ≈ 256` is the ~10k-word
+chunk** that H5's document pass needs, and it is the largest one that does not truncate at
+today's cap. Nobody has run it: the values measured were 1 and 10, and both lost. Measure it
+against `corrector-blocks` with `--repeats 3` before building anything on top of it.
+
+**Then, in order:** name glossary (it gains the most from chunking — a name in chunk 1 and
+chunk 5 is seen by no single call), global consistency pass, overlap at the seams, final
+report. The report is presentation, not measurement: nothing below depends on it.
+
+**Blocked on the author, not on work:**
+- `api/main.py` takes any `file_path` and reads it. Until that contract is chosen — allow-list,
+  content in the body, or auth — the endpoint stays on `127.0.0.1`. See «Interfaces».
+- H5's «done when» asks for a 30–50k-word text and the corpus holds 8,254. Either a real
+  manuscript goes into `evals/corpus/`, or the bar changes to something the harness can score.
+
+**Closed — do not spend money reopening these:** chunking is in (H5); splitting the blocks
+across calls is out and cost 0.13 F0.5 to learn; neither `kind` nor `confidence` predicts a
+bad edit; the output cap binds at ~12,000 words per call, not at the fragment sizes the
+earlier figure was taken from.
+
+**House rule that outranks any instruction to move fast:** nothing becomes a default without
+numbers, and one run is a draw rather than a measurement — `--repeats 3`, always. A gain
+smaller than the spread between two runs of the same system is not a gain.
+
 ## H0 — Evaluation harness (the scientific base) — **done**
 - Typed-error corruptor (accents, agreement, dequeísmo, laísmo, dialogue punctuation,
   quotes, capitalization...). → 17 rules in `evals/corruptor.py`, one per taxonomy type.
@@ -284,6 +313,33 @@ record added in H1 (`metrics.outcomes`) is what made the question answerable off
 A side observation from the same data: `corrector-claude` emitted **zero** off-schema labels
 where `corrector-v0` emitted 42%. Schema adherence is a model property, and the taxonomy is
 therefore worth validating in code rather than trusting to the prompt.
+
+### Refuted: the model's stated confidence does not predict a bad edit either
+
+The same question as above, asked of the other field the corrector fills in and nothing
+reads. `confidence` was carried on `ProposedEdit` and `Edit` from H1 and never looked at; it
+is now in the per-edit record, which is what made this answerable
+(`20260820-104326-confianza.json`, `--repeats 3`, 495 seeded errors).
+
+False positives sit across the whole scale, the top included: **8 of the 23 wrong edits came
+with `confidence` 1.0**, alongside 203 correct ones. A threshold therefore buys almost
+nothing.
+
+| threshold | P | R | F0.5 | FP/1k on clean |
+|---|---|---|---|---|
+| none (today) | 0.949 | 0.879 | **0.934** | 1.33 |
+| 0.90 | 0.953 | 0.879 | 0.937 | 1.33 |
+| 0.95 | 0.958 | 0.855 | 0.936 | 1.09 |
+| 0.99 | 0.964 | 0.558 | 0.841 | **0.00** |
+
+The best F0.5 is +0.003 at 0.90 — smaller than the spread between two runs of the same
+system, so it is not a result. The tempting row is 0.99, where false positives on clean text
+go to zero because none of them exceeded 0.98; it costs a third of the real corrections to
+avoid eleven, and n = 11 is too few to trust that ceiling.
+
+Two self-reported signals have now been tested as predictors and both failed. **The model
+does not know when it is wrong**, so the applied-against-suggested split H3 needs has to rest
+on something other than asking it.
 
 ## H3 — Voice profile
 

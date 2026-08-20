@@ -93,6 +93,10 @@ class Outcome(BaseModel):
     before: str
     after: str
     at: float = Field(ge=0.0, le=1.0, description="Relative position in the text, 0 = start")
+    # The model states this per edit and nothing has ever read it. Recorded so
+    # the question can be asked of it that H1 asked of `kind`: does the label
+    # predict a bad edit? Meaningless on the gold side, which is generated.
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class Score(BaseModel):
@@ -145,6 +149,7 @@ def outcomes(text, gold, predicted, cap=80):
                     before=edit.before(text)[:cap],
                     after=edit.replacement[:cap],
                     at=min(edit.start / span, 1.0),
+                    confidence=edit.confidence,
                 )
             )
     return records

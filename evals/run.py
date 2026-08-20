@@ -273,6 +273,7 @@ def evaluate_clean(system, fragments, concurrency=1):
                     "rule": edit.rule,
                     "before": edit.before(fragment.text),
                     "after": edit.replacement,
+                    "confidence": edit.confidence,
                 }
             )
 
