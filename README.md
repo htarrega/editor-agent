@@ -37,6 +37,29 @@ H0). Drop one or more clean `.txt` files into `evals/corpus/` first; without the
 must go in free of typos of its own: on the untouched corpus every edit counts as a false
 positive, so a pre-existing typo contaminates the headline metric.
 
+## Speed
+
+The default pass takes **~88 s** on a 2,000-word document, and about 87% of that is the model
+deliberating (`docs/PLAN.md`, H1). `corrector-fast` is the other end of that trade:
+
+```bash
+python -m evals.run --systems corrector-blocks,rules-only,corrector-fast \
+       --repeats 3 --concurrency 1        # --concurrency 1: one document at a time,
+                                          # or the s/doc column measures queueing
+```
+
+| | F0.5 | FP/1k on clean text | s per document |
+|---|---|---|---|
+| `corrector-blocks` (default) | **0.947** | 0.12 | ~88 |
+| `corrector-fast` | 0.834 | 0.24 | **2.3** |
+
+38× faster for 0.113 of F0.5, which is nearly three times the run-to-run spread and so a real
+loss rather than a draw. **The default does not move**: which end a manuscript wants is not
+something the harness can decide. `corrector-fast` splits the calls over responsibility while
+every one of them still reads the whole document, turns the deliberation off, and hands the
+orthotypography to `corrector/rules.py` — a rule pack that recovers 150 of the corpus's 495
+seeded errors at P 0.974, in microseconds, and proposes nothing at all on untouched prose.
+
 ## Run
 
 Nothing below needs a key or the corpus:
@@ -64,22 +87,35 @@ measurement — use `--repeats 3` before believing a comparison. The flags are d
 
 ## API
 
-A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY`; it never writes the file.
+A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY`; it never touches the
+filesystem. Work is submitted and polled rather than awaited — a pass runs 60–90 s on a
+2k-word fragment and that is not a wait a single request can hide.
 
 ```bash
 uvicorn api.main:app
-curl -X POST localhost:8000/correct-file \
+
+curl -X POST localhost:8000/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"file_path": "evals/corpus/carta.txt"}'
+  -d '{"text": "El niño comio una manzana, y luego se fue ha casa."}'
+# {"job_id": "...", "status": "running", "words": 11}
+
+curl localhost:8000/jobs/<job_id>
+# {"status": "completed", "text": "El niño comió una manzana, y luego se fue a casa.", ...}
 ```
 
-The body carries the corrected text and what was proposed, applied and rejected. A pass
-whose every call failed answers `502` instead of handing the original text back with a
-`200` that would be indistinguishable from "no errors found"; a pass that lost only some of
-its calls returns what the rest produced, with the failures in `errors`.
+The finished body carries the corrected text and what was proposed, applied and rejected. A
+job whose every call failed ends `failed` with the reason in `detail`, instead of completing
+with the original text in a way that is indistinguishable from "no errors found"; a job that
+lost only some of its calls completes with what the rest produced, failures in `errors`.
 
-**`file_path` is not restricted to any root.** Any file the server process can read is
-readable through the endpoint, so keep it on `127.0.0.1` until that is settled.
+Texts over `EDITOR_AGENT_MAX_WORDS` (2,000) are refused at submit with a `413`. That is a
+measured ceiling rather than a policy — there is no document-level pass yet (`docs/PLAN.md`,
+H5), so above it the pipeline runs where nobody has scored it.
+
+Jobs live in the process's memory: one container, and a restart loses what was in flight.
+
+**Nothing authenticates or rate-limits `POST /jobs`, and every call spends money at a
+provider.** Keep it on `127.0.0.1` until that is settled.
 
 ## Layout
 

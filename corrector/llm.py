@@ -6,6 +6,7 @@ returns the same ``Reply``, so a pass does not know which provider answered it.
 """
 
 import os
+import threading
 
 from pydantic import BaseModel
 
@@ -30,6 +31,29 @@ MAX_OUTPUT_TOKENS = int(os.environ.get("EVAL_MAX_OUTPUT_TOKENS", "32000"))
 # failures survive is part of what a report means, and it should not change
 # quietly under an SDK upgrade.
 MAX_RETRIES = int(os.environ.get("EVAL_MAX_RETRIES", "3"))
+
+
+# One client per provider, shared by every thread.
+#
+# Not a micro-optimisation: a client built per call opens its own TCP
+# connection and negotiates its own TLS, and doing that from sixteen threads at
+# once is what a windowed pass spends its wall clock on. Measured on sixteen
+# identical calls — 8.4 s and 5.9x effective parallelism with a client each,
+# 2.4 s and 13.0x sharing one. Both SDKs document their clients as thread-safe
+# and pool connections internally; the lock is only so two threads do not build
+# the first one twice.
+_clients = {}
+_clients_lock = threading.Lock()
+
+
+def _client(name, build):
+    client = _clients.get(name)
+    if client is None:
+        with _clients_lock:
+            client = _clients.get(name)
+            if client is None:
+                client = _clients[name] = build()
+    return client
 
 
 class Reply(BaseModel):
@@ -85,14 +109,17 @@ def spent(model, reply, seconds):
 
 
 def deepseek_generate(model, system, user, reasoning_effort=None):
-    # Imported here so the offline systems run without the provider SDKs.
-    from openai import OpenAI
+    def build():
+        # Imported here so the offline systems run without the provider SDKs.
+        from openai import OpenAI
 
-    client = OpenAI(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url="https://api.deepseek.com",
-        max_retries=MAX_RETRIES,
-    )
+        return OpenAI(
+            api_key=os.environ["DEEPSEEK_API_KEY"],
+            base_url="https://api.deepseek.com",
+            max_retries=MAX_RETRIES,
+        )
+
+    client = _client("deepseek", build)
     # Omitted rather than defaulted: the naive baseline's numbers are cached
     # and reused, and they were paid for by a request without this field.
     effort = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
@@ -131,14 +158,32 @@ def bounded_deepseek(effort):
     return generate
 
 
-def claude_generate(model, system, user):
-    import anthropic
+def claude_generate(model, system, user, effort=None, thinking=True, max_tokens=None):
+    """One Claude call. ``effort`` is omitted unless a caller asks for it.
 
-    client = anthropic.Anthropic(max_retries=MAX_RETRIES)
+    Sonnet 5 deliberates by default: leaving ``thinking`` unset runs it
+    adaptively, which is why a call that emits four edits spends a thousand
+    output tokens. ``output_config.effort`` is the dial on how much of that it
+    does, and the default is ``high``. It is passed only when set, because the
+    cached rows in the harness — `naive-claude`, `corrector-claude` — were paid
+    for by a request that did not carry the field, and a request that carries
+    it is not the same request.
+    """
+
+    def build():
+        import anthropic
+
+        return anthropic.Anthropic(max_retries=MAX_RETRIES)
+
+    client = _client("anthropic", build)
     extra = {"system": system} if system else {}
+    if effort:
+        extra["output_config"] = {"effort": effort}
+    if not thinking:
+        extra["thinking"] = {"type": "disabled"}
     with client.messages.stream(
         model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        max_tokens=max_tokens or MAX_OUTPUT_TOKENS,
         messages=[{"role": "user", "content": user}],
         **extra,
     ) as stream:
@@ -153,6 +198,28 @@ def claude_generate(model, system, user):
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
     )
+
+
+def tuned_claude(effort=None, thinking=True, max_tokens=None):
+    """A Claude client that says how hard the model may think, and for how long.
+
+    The counterpart of ``bounded_deepseek``: both exist because the model the
+    pass runs on deliberates by default and the deliberation is what the wall
+    clock is made of. What each dial is worth is a measurement, not a guess —
+    see docs/PLAN.md.
+
+    ``max_tokens`` is a ceiling and not a target, but it is worth setting on a
+    windowed pass: ``MAX_OUTPUT_TOKENS`` is sized for a call that answers for a
+    whole document, and a call that answers for two hundred words that runs
+    away has to be stopped an order of magnitude sooner.
+    """
+
+    def generate(model, system, user):
+        return claude_generate(
+            model, system, user, effort=effort, thinking=thinking, max_tokens=max_tokens
+        )
+
+    return generate
 
 
 def _messages(system, user):

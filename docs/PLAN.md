@@ -14,26 +14,55 @@ Moving one is a decision that starts with re-measuring, not a refactor.
 
 Read this before starting work; it is the only part of the document that goes stale.
 
-**Next, and it is a measurement.** `blocks_per_call` exists and is registered
-(`evals/systems.py`). Blocks run ~39 words, so **`blocks_per_call ≈ 256` is the ~10k-word
-chunk** that H5's document pass needs, and it is the largest one that does not truncate at
-today's cap. Nobody has run it: the values measured were 1 and 10, and both lost. Measure it
-against `corrector-blocks` with `--repeats 3` before building anything on top of it.
+**Next, and it is a decision rather than a build.** `corrector-fast` reaches **2.3 s per
+document against 88 s** and costs **0.113 F0.5** doing it (see «Result: five seconds is
+reachable and it costs a ninth of the quality»). The latency question is answered and the
+frontier is measured at both ends; what is open is which end ships, and that is the author's
+call and not a measurement's. Two ways to close the gap, in order of what they are worth:
+
+1. **A Spanish dictionary, for the types that are decidable with one.** `tilde`,
+   `ortografia_h` and `ortografia_bv` are 123 of the corpus's 495 seeded errors and
+   `corrector-fast` recalls them at ~0.75; every one of them corrupts a real word into a
+   non-word, so «out of the dictionary, and one accent away from a word that is in it» finds
+   them without a model call. It is blocked on a *dependency*, not on work: `pyspellchecker`'s
+   bundled Spanish list is 86,158 words and does not contain `hubo` or `corrió`, so it is
+   useless here, and a real hunspell `es_ES` pair is a data file with a licence and a
+   deployment story. Ask before adding it.
+2. **Hedging the deliberating pass.** Its wall clock is one straggler: over 32 windowed calls
+   at `reasoning_effort=minimal` the median is 8.4 s and the slowest 37.8 s. Re-issuing
+   whatever is still outstanding at ~12 s should land the *full-quality* pass near 20 s
+   — 4× better than today at no quality cost, and a different product point from the 2.3 s
+   one. Nobody has built it; the tail that motivates it is measured below.
 
 **Then, in order:** name glossary (it gains the most from chunking — a name in chunk 1 and
 chunk 5 is seen by no single call), global consistency pass, overlap at the seams, final
 report. The report is presentation, not measurement: nothing below depends on it.
 
+`blocks_per_call ≈ 256` is still the ~10k-word chunk H5's document pass needs, and it is a
+question about *scale*, not latency: the two axes met in the table above and gave opposite
+answers, so measure them apart.
+
 **Blocked on the author, not on work:**
-- `api/main.py` takes any `file_path` and reads it. Until that contract is chosen — allow-list,
-  content in the body, or auth — the endpoint stays on `127.0.0.1`. See «Interfaces».
+- Nothing authenticates or rate-limits `POST /jobs`, and every call spends money at a
+  provider. A shared secret, a proxy, or accounts — the endpoint stays on `127.0.0.1` until
+  one is chosen. See «Interfaces».
 - H5's «done when» asks for a 30–50k-word text and the corpus holds 8,254. Either a real
   manuscript goes into `evals/corpus/`, or the bar changes to something the harness can score.
 
-**Closed — do not spend money reopening these:** chunking is in (H5); splitting the blocks
-across calls is out and cost 0.13 F0.5 to learn; neither `kind` nor `confidence` predicts a
-bad edit; the output cap binds at ~12,000 words per call, not at the fragment sizes the
-earlier figure was taken from.
+**Closed — do not spend money reopening these:** ~~the wall clock floors at ~25 s and the
+provider caps effective parallelism near 16~~ — **both were artefacts of building an SDK
+client per call**, see «Refuted» below; the floor is 2.3 s and the provider runs 24–29 calls
+at once. Still closed: chunking is in (H5); splitting the blocks across calls *without
+context* is out on accuracy even once the calls overlap, and it halves the wall clock to lose
+0.039 F0.5 and 10× the false positives — but splitting them *with* context is a different
+system and it is in (`corrector-fast`); a model that does not reason is 5.6× faster and loses
+a quarter of the recall (p = 2.4e-24); DeepSeek's context cache is automatic and input-side
+only, so it cannot touch a bill that is 87% reasoning *output*; neither `kind` nor
+`confidence` predicts a bad edit; the output cap binds at ~12,000 words per call, not at the
+fragment sizes the earlier figure was taken from; more context is not always better — at
+`reasoning_effort=none` the whole document beside a window scores *worse* than ±600 words of
+it (P 0.756 against 0.935); `deepseek-v4-pro` is not a way out, it is the same trade one
+notch along (F 0.802 at 3.5 s, F 0.950 at 53 s).
 
 **House rule that outranks any instruction to move fast:** nothing becomes a default without
 numbers, and one run is a draw rather than a measurement — `--repeats 3`, always. A gain
@@ -341,6 +370,204 @@ Two self-reported signals have now been tested as predictors and both failed. **
 does not know when it is wrong**, so the applied-against-suggested split H3 needs has to rest
 on something other than asking it.
 
+### Finding: the wall clock floors at ~25 s, and the floor is bought with precision
+
+The prediction this replaces was that 68 calls at concurrency 68 would collapse to one wave
+and land near 10 s, since one 50-word call runs 6.6–6.9 s. It does not. Measured on the same
+corrupted fragments, `blocks_per_call=1`, nothing changed but the pool:
+
+| | c=8 | c=32 | c=64 | summed call time |
+|---|---|---|---|---|
+| `sidra`, 68 calls | 67.5 s | 36.9 s | **24.6 s** | ~380–410 s |
+| `carta`, 56 calls | 53.3 s | 27.8 s | 35.3 s | ~345–392 s |
+
+Effective parallelism — summed call time over wall clock — goes 5.6× at c=8, 10.2× at c=32,
+16.6× at c=64, and `carta` is no faster at 64 than at 32. **It rises sublinearly and the
+provider is what caps it**, not the pool: the individual calls do not slow down (5.5–7.0 s
+throughout), there are simply never more than a dozen-odd of them actually in flight.
+
+Two things fall out, and they are the useful ones:
+
+- **~25 s is the practical floor for a 2k-word document on this model**, against 87 s for the
+  single-call default. Not the order of magnitude hoped for; still 3×.
+- **Slicing multiplies the total work by ~4.5×** (87 s of call time in one call becomes
+  ~400 s across 68) and the wall clock only wins because the provider will run a dozen at
+  once. This is the per-call reasoning tax from the finding above, paid 68 times.
+
+There is also a straggler effect that argues for many small calls over few large ones: with
+seven batched calls the slowest one sets the wall clock (172 s summed, 37.3 s elapsed — 4.6×
+of a possible 7), while with 68 the average dominates. Few calls waste the pool.
+
+The floor is bought with precision, which is exactly what the refuted finding above priced:
+per-block is P 0.776 against 0.943 and takes false positives on clean text from 0 to 7 per
+1,700 words. **Latency and overcorrection are the same axis, and the only thing that has ever
+moved one without the other is context** — a 50-word window cannot apply the prompt's own
+rule that a strange word *coherente con el resto del texto* belongs to the author.
+
+### Refuted: the deliberation is not a tax on the work, it is the work
+
+Three quarters of what a pass spends goes to reasoning (86.6% of output tokens over a full
+`--repeats 3` run), and every latency question in this document ends up pointing at it. The
+obvious move is to stop paying it: same prompt, same edit protocol, same 50-word numbering,
+on a model that does not deliberate at all. `corrector-haiku` is that row
+(`claude-haiku-4-5`, `evals/systems.py`), measured against the default in the same run
+(`20260822-121402-latencia.json`, `--repeats 3`, 495 seeded errors).
+
+| system | reasoning | s/call | P | R | F0.5 | FP/1k clean | $ run |
+|---|---|---|---|---|---|---|---|
+| **corrector-blocks** | 86.6% of output | 78.6 | **0.960** | **0.899** | **0.947** | **0.12** | **0.0643** |
+| corrector-haiku | **0%** | **14.1** | 0.876 | 0.648 | 0.818 | 1.57 | 0.2323 |
+
+It is 5.6× faster and it loses a quarter of the recall. Paired on the 495 seeded errors: 301
+caught by both, 30 by neither, **144 only by `corrector-blocks` against 20 only by
+`corrector-haiku`** — McNemar two-sided **p = 2.4e-24**. This is not a draw and not the
+run-to-run spread; it is one error in four that the cheap deliberating model finds and the
+fast one does not. It also costs 3.6× more per run.
+
+**The fourth shortcut of the same shape to be measured and fail.** `reasoning_effort=none`
+was ten times faster and found less while overcorrecting more; an off-taxonomy label does not
+predict a bad edit; stated `confidence` does not either; and now removing the deliberation
+outright takes the recall with it. The pattern is worth naming: every proposal to get quality
+for free by *reading* the model's own behaviour, or by *skipping* the part that costs, has
+been paid for and refuted. Latency here is not waste to be trimmed — it is what the recall is
+bought with, and the product has to be built around the wait rather than against it.
+
+### Refuted: the parallelism ceiling was ours, not the provider's
+
+«The provider caps effective parallelism near 16, so no amount of pool buys more» was the
+conclusion drawn from the c=8/32/64 table above, and it was wrong. `corrector/llm.py` built
+a fresh SDK client inside every call, so each one opened its own connection and negotiated
+its own TLS, and doing that from sixteen threads at once is what the wall clock was being
+spent on. Sixteen identical calls, changing nothing but where the client comes from:
+
+| | wall | effective parallelism |
+|---|---|---|
+| a client per call | 8.4 s | 5.9× |
+| **one client, shared** | **2.4 s** | **13.0×** |
+
+Held to a shared client the real ceiling is 24–29 concurrent calls (32 tiny calls in 1.3 s),
+against the ~16 the earlier table inferred. The clients are documented thread-safe and pool
+connections internally, so this is one lock and a module-level dict; it is the single largest
+latency change in this document and it cost nothing in quality, because it changes no request.
+
+**The lesson is about attribution, not about pools.** Both the ~25 s floor and the «provider
+caps it» explanation were measured honestly and inferred from a variable nobody had thought
+to hold fixed. A ceiling that moves when you change your own client was never the provider's.
+
+### Result: five seconds is reachable and it costs a ninth of the quality
+
+`corrector-fast` is the answer to «get a document under five seconds». It is three changes
+from the default, and each one is a measurement above rather than a knob turned hopefully:
+the calls split over **responsibility while every one still reads the document**
+(`window_blocks=2`, `context_blocks=12`), the deliberation is **off**
+(`reasoning_effort=none`), and a **rule pack** does the orthotypography the model then cannot
+do. `--repeats 3`, 495 seeded errors, per-document latency taken at `--concurrency 1` so a
+document is not queued behind the next one (`20260822-132713-rapido2.json`).
+
+| system | P | R | F0.5 | FP/1k limpio | $ run | **s/documento** |
+|---|---|---|---|---|---|---|
+| **corrector-blocks** | **0.960** | **0.899** | **0.947** | **0.12** | 0.0643 | ~88 |
+| corrector-fast | 0.868 | 0.721 | 0.834 | 0.24 | 0.1711 | **2.3** (peor 3.4) |
+| rules-only | 0.974 | 0.303 | 0.675 | **0.00** | **0.0000** | **0.00** |
+
+**38× faster, and it loses 0.113 F0.5** — nearly three times the run-to-run spread of 0.043,
+so it is a real loss and not a draw. Recall is where it goes: 0.899 to 0.721. Precision holds
+up better than expected (0.868) and overcorrection on clean text stays low (0.24 per 1,000
+words against 0.12), which is the metric the product exists to protect.
+
+**The 0.113 is the deliberation, and this document has now priced it four ways.** Not a
+prompt, not a pool, not a window: the same tax that `reasoning_effort=none` was refuted for
+in H1 and that `corrector-haiku` was refuted for above. What is new is that it is now bought
+deliberately and with the receipt written down, rather than discovered.
+
+`corrector-fast` therefore does **not** become the default. `corrector-blocks` stays, because
+nothing in this document says a manuscript wants speed more than it wants precision, and that
+is the author's decision. What the row buys is the choice.
+
+### Finding: the rule pack is the only thing that ever got quality for free
+
+Five refutations in this document share a shape — every attempt to get quality without paying
+for deliberation failed. `corrector/rules.py` is the exception, and it is worth being precise
+about why it is not a sixth.
+
+Over `--repeats 3` it recovers **150 of the 495 seeded errors at P 0.974**, and on the 8,254
+words of untouched author prose in corpus B it proposes **zero** edits. It runs in
+microseconds and makes no call.
+
+| type | rules | `corrector-fast`'s model, alone |
+|---|---|---|
+| `comillas` | **22/22** | 0/2 |
+| `espaciado` | **45/45** | 3/3 |
+| `mayuscula` | **41/41** | 1/3 |
+| `raya_dialogo` | **22/28** | 1/3 |
+| `signo_apertura` | 20/24, and 4 false | 0/3 |
+
+The reason it works where the shortcuts failed is that these five types are **decidable**.
+The norm names the character that belongs in the position; a regular expression is not an
+approximation of the model's judgement but strictly better than it. Everything else this
+pipeline corrects — whether `vasu` is a typo or the author's Asturian — is a judgement, and
+judgement is what the deliberation is.
+
+Two guards keep this from being a rule pack that scores well and means nothing:
+
+- **The rules answer to the norm, not to `evals/corruptor.py`.** A rule written to invert the
+  corruptor would score 1.000 on corpus A by construction. Each one is instead a rule a copy
+  editor states, which is why `comillas` refuses to act on an odd number of marks and why
+  `raya_dialogo` stops at 0.786 rather than touching `físico-químico`.
+- **Corpus B is the check, and nobody corrupted it.** 0 false positives on 8,254 words is the
+  claim that matters; `tests/test_corrector/test_rules.py` pins a passage carrying one of
+  every construction the rules could misfire on, because the corpus lives outside the repo.
+
+Two attempts to have the *model* do this failed first, which is what makes the rules worth
+the code: narrowing a call to ortotipografía alone moved nothing (0/2 `comillas`, 0/3
+`signo_apertura`), and neither did handing it the whole document as context.
+
+### Finding: what a non-deliberating model attends to is the end of the prompt
+
+`corrector-fast`'s false positives on clean text were, before this, the product's own thesis
+failing: the model «fixing» the author's `vasu` into `vaso` twice, plus style edits the
+prompt's NO CORRIGES section already forbids. Adding a closing paragraph to the per-window
+instruction — name the norm or do not emit; a word the text repeats is the author's; ante la
+duda, no corriges — moved a single fragment from 1 false positive on clean text to 0, and
+precision from 0.842 to 0.935.
+
+Over the full corpus it is a trade rather than a win: **FP/1k on clean text 0.97 → 0.24**,
+recall 0.782 → 0.721, F0.5 0.854 → 0.834 — a wash on the headline, inside the spread, and a
+fourfold cut in the metric this product exists to protect. It is kept for the second reason,
+not the first.
+
+The rule was already in the system prompt and was already being ignored. What changed is
+where it sits: a model with its deliberation off has one reading, and the last thing it reads
+is what survives into the answer.
+
+### Refuted: more draws, more context and a bigger model are all the same non-answer
+
+All three were cheap, all three were measured, none of them buys back the 0.113.
+
+| | P | R | F0.5 |
+|---|---|---|---|
+| one draw | 0.935 | 0.829 | **0.912** |
+| union of 2 draws | 0.909 | 0.857 | 0.898 |
+| union of 3 draws | 0.793 | 0.686 | 0.769 |
+| 2-of-3 majority vote | 0.871 | 0.771 | 0.849 |
+
+Sampling the same model again samples the same weakness: a union buys recall and pays more
+precision for it, a vote buys precision and pays more recall, and F0.5 does not move outside
+the spread either way. Unioning also doubles false positives on clean text, which is the
+direction that matters. Context is the same story from the other side — the whole document
+beside a window scores *worse* than ±600 words of it (P 0.756 against 0.935), so the
+narrowing is not a cost being tolerated for latency, it is the better setting.
+`deepseek-v4-pro` reproduces the frontier one notch along rather than escaping it: F 0.802 at
+3.5 s with deliberation off, F 0.950 at 52.8 s with it on.
+
+**Sonnet 5, measured once and then blocked.** Before the Anthropic balance ran out, the same
+windowed shape on `claude-sonnet-5` scored **F 0.994 (P 1.000, R 0.971)** on `sidra` at 11 s
+— and, tellingly, windowing *raised* its recall from 0.829 to 0.971 against the same model
+answering for the whole document at once. It also cost $0.20 for one 1,737-word fragment,
+which is $1.17 per 10,000 words against the $0.029 the product is built on. Recorded because
+it is the one datum saying the windowed shape is not the thing costing quality — the model
+is. Nothing here depends on it and no row in this document is measured on it.
+
 ## H3 — Voice profile
 
 > The verifier this milestone was written against is gone (see «Dropped milestones»), so the
@@ -354,9 +581,23 @@ on something other than asking it.
   and dialogue with deliberate traits survives intact in a test case — over `--repeats 3`,
   never one run.
 
-## H4 — Failure-driven rule pack
+## H4 — Failure-driven rule pack — **half done**
 
-> **Still blocked on measurement, but the block is smaller.** This milestone picks its
+> **The orthotypographic half is built and measured**: `corrector/rules.py` covers
+> `comillas`, `espaciado`, `mayuscula`, `raya_dialogo` and `signo_apertura`, recovers 150 of
+> 495 seeded errors at P 0.974, and proposes nothing at all on 8,254 words of clean prose.
+> See «Finding: the rule pack is the only thing that ever got quality for free». It is opt-in
+> (`Corrector(mechanical=True)`) and reaches the harness through `corrector-fast` and
+> `rules-only`; `corrector-blocks` is untouched, so every row above still means what it says.
+>
+> `comillas` and `loismo` were this milestone's two surviving targets. `comillas` is done —
+> 22/22, against the 14/22 that motivated it. `loismo` is not: it is grammar, not typography,
+> and no regular expression decides it.
+>
+> **What remains is the part a dictionary decides**, and it is blocked on the dependency
+> named in «Where to pick this up» rather than on analysis.
+
+> **The original note, still true of the types below.** This milestone picks its
 > targets from per-type failures, and at `repeats 1` those counts were 2–16 items carrying
 > ±2 of noise. `--repeats 3` triples them at roughly unchanged wall clock, and the paired
 > McNemar test is the tool for deciding whether a rule helped rather than two headline
@@ -485,6 +726,62 @@ corpus B does not depend on the corruptor: every edit there is a false positive 
 definition. `blocks_per_call` stays registered as `corrector-batched` and
 `corrector-per-block` so the result is reproducible, not because either is a candidate.
 
+### Decision: overlapping a batched pass buys wall clock, and only wall clock
+
+The refutation above measured `blocks_per_call` against accuracy and found it costs 0.13
+F0.5. It could not measure it against latency, because `_correct_batched` was sequential:
+splitting a document into 28 calls and making them one after another is slower than one
+call by construction, so the 225 s against 125 s in that table said nothing about the axis.
+`corrector/correct.py:_call_batches` now overlaps them, results still collected in the order
+the batches were cut — `evals/run.py:correct_all`'s argument one level down, and for the same
+reason: a batched pass appends edits as it goes, so replies arriving out of order would have
+two runs of one text writing two different `Correction`s.
+
+Re-measured with the overlap in place, `--repeats 3` on the full corpus, 495 seeded errors
+(`20260822-121402-latencia.json`):
+
+| system | calls/call shape | P | R | F0.5 | FP/1k clean | $ run | wall |
+|---|---|---|---|---|---|---|---|
+| **corrector-blocks** | all blocks, 1 call | **0.960** | **0.899** | **0.947** | **0.12** | 0.0643 | 650 s |
+| corrector-batched | 10 blocks, ×8 | 0.918 | 0.873 | 0.908 | 1.21 | 0.1065 | **322 s** |
+
+**The latency verdict flips and the accuracy verdict does not.** Overlapped, batching halves
+the wall clock; it still loses 0.039 F0.5 and takes false positives on clean text from 0.12
+to 1.21 per 1,000 words. Paired on the 495 seeded errors — 411 caught by both, 29 by neither,
+34 only by `corrector-blocks`, 21 only by `corrector-batched` — McNemar two-sided **p = 0.10**:
+the recall difference is not established. The precision difference is where the cost sits, and
+it is the metric the product exists to protect. This upgrades the smoke run above from three
+monotonic points at 300 words to a measurement, and reaches the same conclusion.
+
+`corrector-batched` stays out of the default set. The overlap stays, because it is what makes
+the latency of the axis measurable at all, and `Corrector(concurrency=…)` defaults to 1 so
+turning batching on never changes two things at once.
+
+### Finding: the reasoning tax is charged per call, not per word
+
+Latency per *document* is not a number the harness reports: `usage.seconds` sums each call's
+own duration by design, and `wall_seconds` is the whole run over every fragment. What a user
+waits for is one document start to finish, so it was timed directly on `sidra` (1,743 words,
+35 seeded) and `carta` (2,205 words, 44 seeded), one draw each:
+
+| call shape | calls | wall, sidra | wall, carta | reasoning tok | tok/word |
+|---|---|---|---|---|---|
+| all blocks, 1 call | 1 | 87.6 s | 90.2 s | 10,088 | 5.8 |
+| 10 blocks, ×8 | 7 | 37.3 s | 48.9 s | 17,574 | 10.1 |
+| 1 block, ×8 | 68 | 76.0 s | 56.0 s | 35,893 | 20.6 |
+
+**Splitting does not divide the deliberation, it multiplies it.** Cutting `sidra` into 68
+calls asks for 3.6× the reasoning tokens of asking once, because a call spends ~500 tokens
+deliberating no matter how little text it holds. Concurrency claws back a large part of that
+— 446 s of summed call time became 76 s of wall — and still loses to not splitting at all.
+
+The shape that wins is the one where the calls fit in a single wave: seven calls at
+concurrency eight finish together, sixty-eight take eight and a half waves. That also sets
+the floor. One 50-word call runs 6.6–6.9 s, so a per-block pass with concurrency at 68 would
+land near 10 s — and would carry the 7-false-positives-per-1,700-clean-words that the
+refutation above already priced. **The frontier is call count, and it trades latency against
+overcorrection in both directions.** Nobody has run that corner.
+
 ### Decision: the harness runs its calls concurrently
 
 `evals/run.py:correct_all` maps `system.correct` over the texts through a thread pool, sized
@@ -555,19 +852,35 @@ The reasoning lottery survives at this scale — 25,790 words drew 15,067 output
 
 ## Interfaces
 
-**HTTP — partly done.** `api/main.py` exposes `POST /correct-file`: a path in, the corrected
-text and the proposed/applied/rejected counts out. It never writes the file. A pass whose
-every call failed answers 502, because returning the original text with a 200 reads as "this
-text is clean" — the confusion `parse_edits` already refuses to make. A pass that lost only
-some of its calls returns what the rest produced.
+**HTTP — submitted and polled, not awaited.** `api/main.py` exposes `POST /jobs` (text in,
+`202` and a job id out), `GET /jobs/{id}` and `GET /health`. A pass runs 60–90 s on a 2k-word
+fragment and ~87% of that is the model deliberating, which the finding above says is not
+going to shrink. A blocking POST that long trips proxy timeouts and, from a browser, is
+indistinguishable from a server that has died — so the wait is made explicit instead of
+hidden, and the client is told what is happening while it happens.
 
-**Blocked on one decision before it can leave `127.0.0.1`**: `file_path` is not restricted to
-any root, so every file the process can read is readable through the endpoint. The remedy is
-a contract choice — an allow-list, the content in the request body instead of a path, or
-auth — and not a patch.
+A job whose every call failed ends `failed` with the reason in `detail`, because completing
+with the original text reads as "this text is clean" — the confusion `parse_edits` already
+refuses to make. A job that lost only some of its calls completes with what the rest produced
+and the failures in `errors`.
 
-It carries no document-level pass of its own, so it inherits H5's ceiling: nothing above
-~2k words runs end to end.
+**The contract decision is taken: the content travels in the body.** `POST /correct-file` is
+gone rather than patched — it read any path the process could read, which was survivable on
+`127.0.0.1` and is not survivable on a URL. `tests/test_api/test_main.py` pins its absence.
+
+Jobs live in the API process's memory. That is a v1 limit and a deliberate one: it means one
+container and a restart loses whatever was in flight. Anything more wants a queue, and a
+queue wants an operational story this does not have yet.
+
+`EDITOR_AGENT_MAX_WORDS` (2,000) is refused at submit with a `413` naming the number, rather
+than accepted and failed later. It is a measured ceiling, not a policy: there is no
+document-level pass yet, so above it the pipeline runs where nobody has scored it, and
+further up output demand of ~2,700 tokens per 1,000 words meets the token cap and the call
+truncates outright.
+
+**Still open before it leaves `127.0.0.1`**: nothing authenticates or rate-limits the
+endpoint, and every call spends money at a provider. That is the remaining contract choice —
+a shared secret, a proxy in front, or accounts.
 
 ## H6 — Google Drive
 - Read a document from Drive, write the corrected version + the report (Docs with

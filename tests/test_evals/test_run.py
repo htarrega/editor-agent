@@ -136,13 +136,17 @@ class Concurrency(unittest.TestCase):
 
     def test_results_come_back_in_the_order_they_went_out(self):
         system = self.Slow()
-        out = run.correct_all(system, ["a", "b", "c"], concurrency=3)
+        out, seconds = run.correct_all(system, ["a", "b", "c"], concurrency=3)
         # The slow one finished last and still holds the first slot. Which of the
         # two fast ones got there first is the scheduler's business, so only "a"
         # finishing last is asserted — the property under test is the order of
         # `out`, which is what the report is written from.
         self.assertEqual(system.seen[-1], "a")
         self.assertEqual([chr(row.usage.input_tokens) for row in out], ["a", "b", "c"])
+        # The per-document clock travels with the results and in the same order:
+        # "a" is the one that slept, so it is the one that has to read slowest.
+        self.assertEqual(len(seconds), 3)
+        self.assertEqual(max(range(3), key=seconds.__getitem__), 0)
 
     def test_a_system_holds_to_its_own_ceiling(self):
         system = self.Slow(concurrency=1)

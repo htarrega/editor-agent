@@ -35,6 +35,7 @@ class CleanResult(BaseModel):
     words: int = 0
     fragments: int = 0
     unapplied: int = 0
+    seconds: list[float] = []
     by_kind: dict[str, int] = {}
     skipped: list[str] = []
     samples: list[dict] = []
@@ -174,12 +175,26 @@ def correct_all(system, texts, concurrency):
     A system may pin its own ceiling with a ``concurrency`` attribute.
     LanguageTool does: it paces itself against a requests-per-minute limit, and
     firing its chunks at once would defeat the pacing rather than outrun it.
+
+    Returns the outputs and, beside them, how long each document took start to
+    finish. That is the number a user waits for, and no other column reports
+    it: ``usage.seconds`` sums each *call*, and ``wall_seconds`` covers the
+    whole corpus. It is only worth reading at ``--concurrency 1``, where a
+    document is not competing with the next one for the provider's attention —
+    which is why the report records the concurrency next to it.
     """
     limit = max(1, min(concurrency, getattr(system, "concurrency", concurrency)))
+
+    def timed(text):
+        started = time.monotonic()
+        return system.correct(text), time.monotonic() - started
+
     if limit == 1:
-        return [system.correct(text) for text in texts]
-    with ThreadPoolExecutor(max_workers=limit) as pool:
-        return list(pool.map(system.correct, texts))
+        rows = [timed(text) for text in texts]
+    else:
+        with ThreadPoolExecutor(max_workers=limit) as pool:
+            rows = list(pool.map(timed, texts))
+    return [row[0] for row in rows], [row[1] for row in rows]
 
 
 def evaluate(system, fragments, cases, skip_clean=False, concurrency=1):
@@ -190,7 +205,7 @@ def evaluate(system, fragments, cases, skip_clean=False, concurrency=1):
     rejected = Counter()
     detail = []
 
-    outputs = correct_all(system, [case.text for case in cases], concurrency)
+    outputs, doc_seconds = correct_all(system, [case.text for case in cases], concurrency)
     for case, out in zip(cases, outputs, strict=True):
         usage.add(out.usage)
         errors.extend(f"{case.name}: {e}" for e in out.errors)
@@ -207,6 +222,7 @@ def evaluate(system, fragments, cases, skip_clean=False, concurrency=1):
         clean, clean_usage, clean_errors, clean_rejected = evaluate_clean(
             system, fragments, concurrency
         )
+        doc_seconds = doc_seconds + clean.seconds
         usage.add(clean_usage)
         errors.extend(clean_errors)
         rejected.update(clean_rejected)
@@ -220,6 +236,10 @@ def evaluate(system, fragments, cases, skip_clean=False, concurrency=1):
         # per call and does not move when calls overlap. Elapsed time does, and
         # it is the only number that says whether a run got faster.
         "wall_seconds": time.monotonic() - started,
+        # One document, start to finish — what a user actually waits for. The
+        # concurrency travels with it because a run that overlaps its documents
+        # is measuring contention as well as latency.
+        "document_seconds": summarise_latency(doc_seconds, concurrency),
         "unactionable": skipped,
         # Why a proposal never became an edit. ARCHITECTURE §4 requires the
         # discards to be logged, not merely counted: a run where the anchors
@@ -248,7 +268,9 @@ def evaluate_clean(system, fragments, concurrency=1):
     result = CleanResult()
     distances, by_kind, rejected = [], Counter(), Counter()
 
-    outputs = correct_all(system, [fragment.text for fragment in fragments], concurrency)
+    outputs, clean_seconds = correct_all(
+        system, [fragment.text for fragment in fragments], concurrency
+    )
     for fragment, out in zip(fragments, outputs, strict=True):
         usage.add(out.usage)
         errors.extend(f"{fragment.name} (limpio): {e}" for e in out.errors)
@@ -287,14 +309,37 @@ def evaluate_clean(system, fragments, concurrency=1):
     result.by_kind = dict(sorted(by_kind.items(), key=lambda kv: -kv[1]))
     result.fp_per_1k = 1000 * result.fp / result.words if result.words else 0.0
     result.voice = sum(distances) / len(distances) if distances else 0.0
+    result.seconds = clean_seconds
     return result, usage, errors, rejected
+
+
+def summarise_latency(seconds, concurrency):
+    """What one document cost in wall clock, and whether the number is readable.
+
+    `trustworthy` is false whenever documents overlapped: the harness then
+    measures the corpus against the provider's throughput, not the pipeline's
+    latency, and the two look identical in a table.
+    """
+    if not seconds:
+        return {"documents": 0, "trustworthy": False, "concurrency": concurrency}
+    ordered = sorted(seconds)
+    return {
+        "documents": len(ordered),
+        "mean": sum(ordered) / len(ordered),
+        "median": ordered[len(ordered) // 2],
+        # The one a user remembers. A pass is as slow as its worst draw.
+        "max": ordered[-1],
+        "each": seconds,
+        "concurrency": concurrency,
+        "trustworthy": concurrency == 1,
+    }
 
 
 # --- rendering --------------------------------------------------------------
 
 SUMMARY_HEADER = (
     f"{'sistema':<16} {'P':>6} {'R':>6} {'F0.5':>6} "
-    f"{'FP/1k':>7} {'voz':>6} {'coste$':>8} {'seg':>6}"
+    f"{'FP/1k':>7} {'voz':>6} {'coste$':>8} {'seg':>6} {'s/doc':>7}"
 )
 
 
@@ -322,9 +367,17 @@ def summary_row(name, result):
     # Cost and seconds of a reused row were paid by an earlier run; the row says
     # so, because otherwise this run looks like it spent them.
     cache = "  ↺ caché" if result.get("reused_from") else ""
+    # Older reports predate the column; a reused row still has to render.
+    latency = result.get("document_seconds") or {}
+    per_doc = (
+        f"{latency['mean']:>6.1f}{'' if latency.get('trustworthy') else '~'}"
+        if latency.get("documents")
+        else "     -"
+    )
     return (
         f"{name:<16} {o['precision']:>6.3f} {o['recall']:>6.3f} {o['f05']:>6.3f} "
-        f"{c['fp_per_1k']:>7.2f} {c['voice']:>6.3f} {u['cost_usd']:>8.4f} {u['seconds']:>6.1f}"
+        f"{c['fp_per_1k']:>7.2f} {c['voice']:>6.3f} {u['cost_usd']:>8.4f} {u['seconds']:>6.1f} "
+        f"{per_doc:>7}"
         f"{cache}{warning}"
     )
 

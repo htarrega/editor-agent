@@ -3,7 +3,7 @@ import re
 import unittest
 
 from corrector.blocks import block_spans
-from corrector.correct import Corrector, kinds_block, parse_edits, render
+from corrector.correct import FOCUS, Corrector, _windows, kinds_block, parse_edits, render
 from corrector.edits import apply_edits, line_spans
 from corrector.llm import Reply
 from corrector.taxonomy import ERROR_TYPES
@@ -366,6 +366,147 @@ class BatchedCorrectorPass(unittest.TestCase):
         self.assertEqual(len(result.edits), 1)
         applied, _ = apply_edits(text, result.edits)
         self.assertEqual(applied, "el gatto duerme.\nla casona roja.")
+
+
+class Windows(unittest.TestCase):
+    """The ranges a windowed pass hands out. Every character belongs to exactly
+    one window, which is what lets an edit be attributed by offset alone."""
+
+    TEXT = "\n".join(f"linea {n} aqui." for n in range(1, 8))  # 7 blocks
+
+    def test_the_owned_ranges_partition_the_text(self):
+        windows = _windows(self.TEXT, block_spans(self.TEXT), 3)
+        self.assertEqual(windows[0].start, 0)
+        self.assertEqual(windows[-1].end, len(self.TEXT))
+        for earlier, later in zip(windows, windows[1:]):
+            self.assertEqual(earlier.end, later.start)
+
+    def test_the_gap_between_two_blocks_belongs_to_the_later_window(self):
+        # The newline between block 3 and block 4 is inside no block at all.
+        # It has to fall on one side or the other, or an edit landing on it
+        # would be dropped by both windows.
+        spans = block_spans(self.TEXT)
+        windows = _windows(self.TEXT, spans, 3)
+        gap = spans[2][1]  # end of block 3, before the newline
+        self.assertTrue(windows[0].start <= gap < windows[0].end)
+        self.assertEqual(windows[1].start, spans[3][0])
+
+    def test_without_context_every_window_is_shown_the_whole_document(self):
+        spans = block_spans(self.TEXT)
+        for window in _windows(self.TEXT, spans, 2):
+            self.assertEqual(window.shown, spans)
+            self.assertEqual(window.shown_first, 1)
+
+    def test_context_narrows_what_is_shown_but_not_what_is_owned(self):
+        spans = block_spans(self.TEXT)
+        windows = _windows(self.TEXT, spans, 1, context=1)
+        middle = windows[3]  # owns block 4 alone
+        self.assertEqual((middle.first, middle.last), (4, 4))
+        # Blocks 3, 4 and 5 are shown, numbered from 3.
+        self.assertEqual(middle.shown, spans[2:5])
+        self.assertEqual(middle.shown_first, 3)
+
+    def test_context_does_not_run_off_either_end(self):
+        spans = block_spans(self.TEXT)
+        windows = _windows(self.TEXT, spans, 1, context=99)
+        self.assertEqual(windows[0].shown_first, 1)
+        self.assertEqual(windows[-1].shown, spans)
+
+
+class WindowedCorrectorPass(unittest.TestCase):
+    """`window_blocks`: the calls split the *responsibility* and share the context.
+
+    The point of the mode is that every call still sees the whole document, so
+    the tests here are mostly about what stops two calls that read the same
+    text from both acting on it.
+    """
+
+    TEXT = "\n".join(f"linea {n} aqui." for n in range(1, 8))
+
+    def corrector(self, size, replies, **kwargs):
+        self.seen = []
+        answers = iter(replies)
+
+        def generate(model, system, user):
+            self.seen.append(user)
+            return Reply(text=next(answers))
+
+        return Corrector(
+            "deepseek-v4-flash", generate, block_words=None, window_blocks=size, **kwargs
+        )
+
+    def test_default_construction_is_unaffected(self):
+        self.assertIsNone(Corrector("deepseek-v4-flash", fake(edits_json())).window_blocks)
+
+    def test_one_call_per_window(self):
+        self.corrector(3, [edits_json()] * 3).correct(self.TEXT)
+        self.assertEqual(len(self.seen), 3)
+
+    def test_every_call_carries_the_whole_document(self):
+        # This is the whole difference from `blocks_per_call`, which shows a
+        # call its own blocks and nothing else — and pays 0.039 F0.5 for it.
+        self.corrector(3, [edits_json()] * 3).correct(self.TEXT)
+        for call in self.seen:
+            markers = re.findall(r"^\[(\d+)\]$", call, re.M)
+            self.assertEqual(markers, [str(n) for n in range(1, 8)])
+
+    def test_each_call_is_told_which_blocks_are_its_own(self):
+        self.corrector(3, [edits_json()] * 3).correct(self.TEXT)
+        wanted = [
+            FOCUS.format(first=1, last=3),
+            FOCUS.format(first=4, last=6),
+            FOCUS.format(first=7, last=7),
+        ]
+        self.assertEqual([call[-len(w) :] for call, w in zip(self.seen, wanted)], wanted)
+
+    def test_an_edit_outside_its_window_is_dropped(self):
+        # Every call reads the whole text, so every call can see the error in
+        # block 1. Only the window that owns block 1 may act on it; without
+        # that the edit would be proposed three times and applied twice.
+        item = {"line": 1, "original": "linea 1", "replacement": "línea 1"}
+        result = self.corrector(3, [edits_json(item)] * 3).correct(self.TEXT)
+        self.assertEqual(len(result.edits), 1)
+        self.assertEqual(result.rejected["out_of_window"], 2)
+
+    def test_ownership_is_decided_on_the_offset_not_on_the_reported_line(self):
+        # The model puts the right anchor under a line number from another
+        # window. The anchor is what resolves, so the edit belongs to whoever
+        # owns where it landed — here the second call, which claimed it.
+        item = {"line": 1, "original": "linea 5", "replacement": "línea 5"}
+        result = self.corrector(3, [edits_json(), edits_json(item), edits_json()]).correct(
+            self.TEXT
+        )
+        self.assertEqual(len(result.edits), 1)
+        applied, _ = apply_edits(self.TEXT, result.edits)
+        self.assertIn("línea 5", applied)
+
+    def test_one_failing_window_does_not_lose_the_others_edits(self):
+        item = {"line": 5, "original": "linea 5", "replacement": "línea 5"}
+        replies = [edits_json(), edits_json(item), edits_json()]
+        self.seen = []
+        answers = iter(replies)
+
+        def generate(model, system, user):
+            self.seen.append(user)
+            reply = next(answers)
+            if len(self.seen) == 1:
+                raise RuntimeError("truncado")
+            return Reply(text=reply)
+
+        corrector = Corrector("deepseek-v4-flash", generate, block_words=None, window_blocks=3)
+        result = corrector.correct(self.TEXT)
+        self.assertEqual(len(result.edits), 1)
+        self.assertEqual(result.errors, ["RuntimeError: truncado"])
+        self.assertLess(len(result.errors), result.usage.calls)
+
+    def test_context_blocks_shows_a_neighbourhood_instead_of_the_document(self):
+        self.corrector(1, [edits_json()] * 7, context_blocks=1).correct(self.TEXT)
+        markers = re.findall(r"^\[(\d+)\]$", self.seen[3], re.M)
+        self.assertEqual(markers, ["3", "4", "5"])
+
+    def test_a_windowed_pass_cannot_also_be_a_batched_one(self):
+        with self.assertRaises(ValueError):
+            Corrector("deepseek-v4-flash", fake(edits_json()), blocks_per_call=2, window_blocks=2)
 
 
 if __name__ == "__main__":

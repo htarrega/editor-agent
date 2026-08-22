@@ -23,6 +23,7 @@ from corrector.llm import (
     price,
     spent,
 )
+from corrector.rules import mechanical_edits
 
 # Re-exported: the harness talks about cost and usage in its own report, and
 # the modules around it read these off `systems`.
@@ -54,6 +55,22 @@ class Output(BaseModel):
     skipped: int = 0
     rejected: dict[str, int] = {}
     errors: list[str] = []
+
+
+class RulesSystem:
+    """The orthotypographic rule pack on its own. No model, no calls, no cost.
+
+    It exists to be subtracted. `corrector-fast` is a rule pass and a model
+    pass in one row, and without this one there is no way to read which of them
+    a gain or a regression came from — least of all on the four types where
+    both of them have something to say.
+    """
+
+    name = "rules-only"
+    concurrency = 1
+
+    def correct(self, text):
+        return Output(edits=mechanical_edits(text))
 
 
 class NullSystem:
@@ -319,6 +336,7 @@ BUILDERS = {
             bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
             block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
             blocks_per_call=int(os.environ.get("EVAL_BLOCKS_PER_CALL", "10")),
+            concurrency=int(os.environ.get("EVAL_BLOCKS_CONCURRENCY", "1")),
         ),
     ),
     "corrector-per-block": lambda: CorrectorSystem(
@@ -328,6 +346,7 @@ BUILDERS = {
             bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
             block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
             blocks_per_call=1,
+            concurrency=int(os.environ.get("EVAL_BLOCKS_CONCURRENCY", "1")),
         ),
     ),
     # The same pass on the strong model. Not a baseline and not the target
@@ -337,6 +356,48 @@ BUILDERS = {
     # other half of H1's prompt-against-model square, and that square was
     # measured before the blocks existed. A chunked strong model is a row nobody
     # has paid for yet, and it would need a name of its own.
+    # Our prompt and protocol on a model that does not reason. `corrector-claude`
+    # and `corrector-blocks` are both deliberating models; this is the cell that
+    # says whether the ~90% of output tokens spent on deliberation is the task
+    # asking for it or the model choosing to.
+    "corrector-haiku": lambda: CorrectorSystem(
+        "corrector-haiku",
+        Corrector(
+            os.environ.get("EVAL_HAIKU_MODEL", "claude-haiku-4-5"),
+            claude_generate,
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+        ),
+    ),
+    # The latency row. Three changes from `corrector-blocks`, and each one is
+    # the answer to a measurement in docs/PLAN.md rather than a knob turned
+    # hopefully:
+    #
+    #  · `window_blocks` splits the calls over *responsibility* while every one
+    #    of them still reads the document — which is what `corrector-batched`
+    #    gave up, and what its 0.039 F0.5 bought back.
+    #  · `reasoning_effort=none` is the only setting that puts a call under
+    #    five seconds; at `minimal` the median call is 8.4 s and the slowest 38.
+    #  · `mechanical` is what pays for the deliberation being gone. The four
+    #    orthotypographic types are decidable, the model is measurably bad at
+    #    them with or without deliberation, and the rule pack scores 150 of the
+    #    corpus's 495 seeded errors at P 0.974 in microseconds.
+    "corrector-fast": lambda: CorrectorSystem(
+        "corrector-fast",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_FAST_EFFORT", "none")),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            window_blocks=int(os.environ.get("EVAL_WINDOW_BLOCKS", "2")),
+            context_blocks=_optional_int(os.environ.get("EVAL_WINDOW_CONTEXT", "12")),
+            concurrency=int(os.environ.get("EVAL_WINDOW_CONCURRENCY", "40")),
+            mechanical=True,
+        ),
+    ),
+    # The rule pack with no model behind it at all. Not a candidate — it can
+    # only ever see four error types — but the row that says how much of
+    # `corrector-fast` is the rules and how much is the calls, which is not
+    # readable from the two systems' headline numbers.
+    "rules-only": RulesSystem,
     "corrector-claude": lambda: CorrectorSystem(
         "corrector-claude",
         Corrector(
@@ -353,6 +414,11 @@ BUILDERS = {
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
 DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-blocks"]
+
+
+def _optional_int(value):
+    """`none` is a value here: it is what asks a window for the whole document."""
+    return None if not value or value.lower() in {"none", "all"} else int(value)
 
 
 def build(names):

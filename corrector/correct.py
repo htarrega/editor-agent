@@ -15,13 +15,15 @@ handed it.
 import json
 import re
 import time
-from collections import Counter
+from collections import Counter, namedtuple
+from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel, ValidationError
 
 from corrector.blocks import DEFAULT_BLOCK_WORDS, block_spans
 from corrector.edits import Edit, ProposedEdit, resolve_edits, trim
 from corrector.llm import Usage, spent
+from corrector.rules import mechanical_edits
 from corrector.taxonomy import ERROR_TYPES
 
 FENCE = re.compile(r"```[^\n]*\n(?P<body>.*?)```", re.DOTALL)
@@ -72,6 +74,56 @@ SALIDA
 - «confidence»: entre 0 y 1.
 
 Si el texto no tiene errores, devuelves {{"edits": []}}."""
+
+# Appended to the user message, after the numbered text, when a call owns only
+# part of the document. Last rather than first so that everything above it —
+# system prompt and document — stays a stable prefix across the calls of one
+# pass, and because the constraint the model has to hold while it answers is
+# the one it read most recently.
+FOCUS = """
+
+Corriges ÚNICAMENTE los bloques [{first}] a [{last}].
+
+El resto del texto está aquí como contexto y no como encargo: es lo que te
+permite saber si una palabra rara es del autor, si un nombre propio se escribe
+así en todo el manuscrito o si un diálogo venía ya abierto. No propones
+ediciones fuera de ese rango —otra llamada se ocupa de ellos— y las que
+propongas dentro se descartan si caen fuera.
+
+Antes de emitir cada edición, compruébala contra esta regla: si no puedes
+nombrar la norma ortográfica, gramatical u ortotipográfica que incumple, no es
+un error y no la emites. No hay ediciones de estilo, ni de léxico, ni de
+registro, ni de ritmo. Una palabra que no reconoces y que el texto repite es
+del autor y se queda como está. Ante la duda, no corriges."""
+
+
+# One narrowed brief per mechanical category, appended after FOCUS when a pass
+# runs its windows once per aspect instead of once.
+#
+# A model that does not deliberate is answering from one reading, and one
+# reading of "todo lo anterior" is worse than three readings of a third of it:
+# the whole `CORRIGES` list stays in the system prompt — the voice policy with
+# it — and this only says which part of it this call is answering for.
+ASPECTS = {
+    "ortografía": (
+        "En esta pasada buscas SOLO ortografía: tildes, tildes diacríticas, h "
+        "inicial, b/v, y homófonos (haber/a ver, hay/ahí, echo/hecho, haya/halla, "
+        "tuvo/tubo, sino/si no). Nada de gramática ni de ortotipografía."
+    ),
+    "gramática": (
+        "En esta pasada buscas SOLO gramática: concordancia de género y de número, "
+        "dequeísmo, queísmo, laísmo, loísmo y formas verbales inexistentes "
+        "(«dijistes» por «dijiste»). Nada de ortografía ni de ortotipografía."
+    ),
+    "ortotipografía": (
+        "En esta pasada buscas SOLO ortotipografía: raya de diálogo (— y no guion "
+        "ni menos), comillas latinas («»), signos de apertura (¿ ¡), espacio "
+        "sobrante o ausente junto a la puntuación, y mayúsculas y minúsculas. "
+        "Nada de ortografía ni de gramática."
+    ),
+}
+
+MECHANICAL = tuple(ASPECTS)
 
 
 class Correction(BaseModel):
@@ -157,22 +209,93 @@ class Corrector:
         prompt=None,
         block_words=DEFAULT_BLOCK_WORDS,
         blocks_per_call=None,
+        concurrency=1,
+        window_blocks=None,
+        context_blocks=None,
+        aspects=None,
+        mechanical=False,
     ):
         # `block_words=None` is one block per line, which is what H1 measured and
         # what the frozen reference rows in the harness ask for by name.
+        if blocks_per_call and window_blocks:
+            raise ValueError("blocks_per_call and window_blocks are two ways to cut the same pass")
         self.model = model
         self.prompt = (prompt or PROMPT).format(kinds=kinds_block())
         self.block_words = block_words
         self.blocks_per_call = blocks_per_call
+        self.window_blocks = window_blocks
+        self.context_blocks = context_blocks
+        unknown = [name for name in aspects or () if name not in ASPECTS]
+        if unknown:
+            raise ValueError(f"unknown aspects {unknown}; available: {sorted(ASPECTS)}")
+        self.aspects = tuple(aspects) if aspects else ()
+        # Off by default: every row in docs/PLAN.md was measured without it,
+        # and a pass that silently gained a second source of edits would make
+        # those rows say something they were never asked.
+        self.mechanical = mechanical
+        # Only ever reached through `blocks_per_call` or `window_blocks`; the
+        # whole-document path is one call and has nothing to overlap. Defaults
+        # to 1 so that turning either on does not change two things at once.
+        self.concurrency = concurrency
         self._generate = generate
 
     def correct(self, text):
         # Rendered and resolved from the same spans, so what the model was
         # numbered and what an anchor is searched inside cannot drift apart.
         spans = block_spans(text, self.block_words)
-        if self.blocks_per_call:
-            return self._correct_batched(text, spans, self.blocks_per_call)
-        return self._correct_whole(text, spans)
+        if self.window_blocks:
+            result = self._correct_windowed(text, spans, self.window_blocks)
+        elif self.blocks_per_call:
+            result = self._correct_batched(text, spans, self.blocks_per_call)
+        else:
+            result = self._correct_whole(text, spans)
+        return self._with_rules(text, result) if self.mechanical else result
+
+    def _with_rules(self, text, result):
+        """The rule pack's edits alongside the model's, rules winning any clash.
+
+        Rules win because they are decidable and the model is not: on the four
+        types this covers the pack scores P 1.000 on 8,254 words of untouched
+        prose, which is a claim no model output in this repository can make.
+        Where the two propose different fixes to the same characters, keeping
+        both would have `apply_edits` drop one as overlapping — silently, and
+        by position rather than by which is more likely right.
+
+        A model edit that merely repeats a rule's is counted as `duplicate`
+        rather than discarded quietly: it is the measure of how much of this
+        the model was doing anyway, and it is what a later run would watch to
+        decide whether the prompt should stop asking for it at all.
+        """
+        rules = mechanical_edits(text)
+        if not rules:
+            return result
+
+        rejected = Counter(result.rejected)
+        kept = []
+        for edit in result.edits:
+            clash = next(
+                (rule for rule in rules if edit.start < rule.end and rule.start < edit.end), None
+            )
+            # An insertion is zero-width, so the interval test above never
+            # catches one sitting exactly where a rule inserts.
+            if clash is None and edit.start == edit.end:
+                clash = next((rule for rule in rules if rule.start == edit.start), None)
+            if clash is None:
+                kept.append(edit)
+            elif (clash.start, clash.end, clash.replacement) == (
+                edit.start,
+                edit.end,
+                edit.replacement,
+            ):
+                rejected["duplicate"] += 1
+            else:
+                rejected["superseded_by_rule"] += 1
+
+        result.proposed += len(rules)
+        result.edits = sorted(kept + rules, key=lambda edit: (edit.start, edit.end))
+        result.rejected = dict(rejected)
+        result.skipped = sum(rejected.values())
+        return result
 
     def _correct_whole(self, text, spans):
         """Today's shape: every block in one prompt, one call for the document."""
@@ -227,18 +350,19 @@ class Corrector:
         """
         result = Correction()
         rejected = Counter()
-        for offset in range(0, len(spans), size):
-            batch = spans[offset : offset + size]
-            first = offset + 1
-            started = time.monotonic()
-            try:
-                reply = self._generate(self.model, self.prompt, render(text, batch, first=first))
-            except Exception as exc:
-                result.errors.append(f"{type(exc).__name__}: {exc}")
-                result.usage.add(Usage(calls=1, seconds=time.monotonic() - started))
+        batches = [
+            (offset + 1, spans[offset : offset + size]) for offset in range(0, len(spans), size)
+        ]
+        users = [render(text, batch, first=first) for first, batch in batches]
+        for (first, batch), (reply, failure, seconds) in zip(
+            batches, self._fanout(users), strict=True
+        ):
+            if failure is not None:
+                result.errors.append(f"{type(failure).__name__}: {failure}")
+                result.usage.add(Usage(calls=1, seconds=seconds))
                 continue
 
-            result.usage.add(spent(self.model, reply, time.monotonic() - started))
+            result.usage.add(spent(self.model, reply, seconds))
             try:
                 proposals, malformed = parse_edits(reply.text)
             except ValueError as exc:
@@ -259,6 +383,149 @@ class Corrector:
         result.rejected = dict(rejected)
         result.skipped = sum(rejected.values())
         return result
+
+    def _correct_windowed(self, text, spans, size):
+        """``size`` blocks per call, and the whole document behind each of them.
+
+        The other split — `_correct_batched` — sends a call the blocks it owns
+        and nothing else, and that is measured to cost 0.039 F0.5 and ten times
+        the false positives on clean text (docs/PLAN.md, H5). The reason is in
+        the prompt rather than in the arithmetic: a rule that says a strange
+        word *coherente con el resto del texto* belongs to the author cannot be
+        applied by a call that was never shown the rest of the text. So here
+        the split is over *responsibility* and not over context. Every call
+        reads the same document, numbered identically, and is told which blocks
+        are its own; latency falls with the number of calls and the evidence
+        each one judges on does not move.
+
+        A window owns a contiguous range of characters, and the ranges
+        partition the text. Ownership is settled on the resolved offset rather
+        than on the ``line`` the model reported, because the number is a hint
+        it may get wrong and the offset is a fact: an edit that lands outside
+        its window is dropped as ``out_of_window``, which is what keeps two
+        calls that both noticed the same error from applying it twice.
+
+        ``context_blocks`` narrows what is shown from the whole document to
+        that many blocks on either side. It exists because the context is
+        re-sent per call and therefore is what a windowed pass pays for; a
+        pass that does not need the far end of the document should not buy it.
+        """
+        result = Correction()
+        rejected = Counter()
+        jobs, users = [], []
+        for window in _windows(text, spans, size, self.context_blocks):
+            shown = render(text, window.shown, first=window.shown_first)
+            brief = shown + FOCUS.format(first=window.first, last=window.last)
+            for aspect in self.aspects or (None,):
+                jobs.append(window)
+                users.append(brief if aspect is None else brief + "\n\n" + ASPECTS[aspect])
+
+        # Two aspects of one window can reach the same error from different
+        # sides — a missing opening «¿» is ortotipografía and the capital that
+        # follows it is not — so the same edit can arrive twice. Kept once:
+        # `apply_edits` would drop the second as overlapping anyway, but it
+        # would have been counted as a proposal and scored as a false positive.
+        seen = set()
+        for window, (reply, failure, seconds) in zip(jobs, self._fanout(users), strict=True):
+            if failure is not None:
+                result.errors.append(f"{type(failure).__name__}: {failure}")
+                result.usage.add(Usage(calls=1, seconds=seconds))
+                continue
+
+            result.usage.add(spent(self.model, reply, seconds))
+            try:
+                proposals, malformed = parse_edits(reply.text)
+            except ValueError as exc:
+                result.errors.append(f"unparseable reply: {exc}")
+                continue
+
+            result.proposed += len(proposals) + malformed
+            # Resolved against the document's own spans, which is the numbering
+            # every call was shown: `shown_first` carries the true index of the
+            # first block in the window, so a «line» means the same thing in
+            # every call and in the text.
+            edits, window_rejected = _resolve(text, proposals, malformed, spans)
+            kept, duplicate = [], 0
+            for edit in edits:
+                if not window.start <= edit.start < window.end:
+                    continue
+                signature = (edit.start, edit.end, edit.replacement)
+                if signature in seen:
+                    duplicate += 1
+                    continue
+                seen.add(signature)
+                kept.append(edit)
+            rejected.update(window_rejected)
+            outside = len(edits) - len(kept) - duplicate
+            if outside:
+                rejected["out_of_window"] += outside
+            if duplicate:
+                rejected["duplicate"] += duplicate
+            result.edits.extend(kept)
+
+        result.rejected = dict(rejected)
+        result.skipped = sum(rejected.values())
+        return result
+
+    def _fanout(self, users):
+        """One reply per user message, in the order they were built.
+
+        The calls are independent, so they overlap; what is done with the
+        answers is not, and the accumulation above stays sequential and in
+        order. A split pass appends edits and counts rejections as it goes, so
+        replies arriving out of order would have two runs of one text writing
+        two different `Correction`s, neither of them wrong. This is
+        `evals/run.py:correct_all`'s argument applied one level down: there the
+        unit is a document, here it is one call's share of it.
+
+        The exception is carried back rather than raised: a failing call is
+        recorded and skipped, and raising here would discard every other call's
+        edits along with it.
+        """
+
+        def call(user):
+            started = time.monotonic()
+            try:
+                reply = self._generate(self.model, self.prompt, user)
+            except Exception as exc:
+                return None, exc, time.monotonic() - started
+            return reply, None, time.monotonic() - started
+
+        if self.concurrency <= 1 or len(users) <= 1:
+            return [call(user) for user in users]
+        with ThreadPoolExecutor(max_workers=min(self.concurrency, len(users))) as pool:
+            return list(pool.map(call, users))
+
+
+# What one windowed call is responsible for and what it is shown. `start`/`end`
+# are the characters it owns, `first`/`last` the block numbers it is told to
+# correct, and `shown`/`shown_first` the spans that go into its prompt — the
+# whole document unless `context_blocks` narrows it.
+Window = namedtuple("Window", "first last start end shown shown_first")
+
+
+def _windows(text, spans, size, context=None):
+    """Cut the blocks into windows whose owned character ranges partition the text.
+
+    A window starts where its first block starts and ends where the next
+    window's first block starts, so the whitespace between two blocks — and
+    anything before the first block or after the last — belongs to exactly one
+    window rather than to none. An edit can therefore be attributed by offset
+    alone, which is what lets two calls that both spotted the same error be
+    reconciled without asking either of them where it was.
+    """
+    bounds = [(offset + 1, min(offset + size, len(spans))) for offset in range(0, len(spans), size)]
+    windows = []
+    for index, (first, last) in enumerate(bounds):
+        start = spans[first - 1][0] if index else 0
+        end = spans[bounds[index + 1][0] - 1][0] if index + 1 < len(bounds) else len(text)
+        if context is None:
+            shown, shown_first = spans, 1
+        else:
+            low = max(0, first - 1 - context)
+            shown, shown_first = spans[low : min(len(spans), last + context)], low + 1
+        windows.append(Window(first, last, start, end, shown, shown_first))
+    return windows
 
 
 def _resolve(text, proposals, malformed, spans=None):
