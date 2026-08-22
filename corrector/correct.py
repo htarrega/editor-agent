@@ -97,6 +97,42 @@ registro, ni de ritmo. Una palabra que no reconoces y que el texto repite es
 del autor y se queda como está. Ante la duda, no corriges."""
 
 
+# The second wave. One call per proposed edit, and a much easier question than
+# the one that produced it: judging a candidate is not finding one.
+#
+# H2 was dropped because the default pass left almost nothing to verify — 0.12
+# false positives per 1,000 clean words. `corrector-fast` restores the premise
+# it died for: with the deliberation off, precision falls to ~0.90, and a
+# verifier exists exactly to buy that back without touching what recall is made
+# of. The calls are independent and tiny, so the whole wave is one round trip.
+VERIFY = """Eres un corrector profesional de narrativa en español, revisando una corrección
+que ha propuesto un compañero sobre un texto.
+
+Tu compañero ya ha leído el texto y ha visto algo. Tu trabajo no es volver a
+corregir: es descartar lo que se le ha colado. Por eso la respuesta por defecto
+es MANTENER, y solo descartas cuando estás seguro.
+
+DESCARTAR si el texto original, tal como está, ya es correcto:
+- la corrección es de estilo, léxico, registro o ritmo, no de norma;
+- la palabra es inventada, un dialectalismo, un arcaísmo o un nombre propio del
+  autor —aunque no la reconozcas, es suya y se queda—;
+- la corrección cambia el sentido de la frase;
+- las dos formas son correctas y la elección es del autor.
+
+MANTENER en todo lo demás, incluido cuando no estás seguro: tu compañero tenía
+delante el mismo texto que tú.
+
+Respondes únicamente MANTENER o DESCARTAR, sin explicar nada."""
+
+PROPOSAL = """{context}
+
+En el bloque [{block}] se propone esta corrección:
+
+  «{original}» → «{replacement}»
+
+¿Mantener o descartar? Responde únicamente MANTENER o DESCARTAR."""
+
+
 # One narrowed brief per mechanical category, appended after FOCUS when a pass
 # runs its windows once per aspect instead of once.
 #
@@ -229,6 +265,7 @@ class Corrector:
         context_blocks=None,
         aspects=None,
         mechanical=False,
+        verify=False,
     ):
         # `block_words=None` is one block per line, which is what H1 measured and
         # what the frozen reference rows in the harness ask for by name.
@@ -248,6 +285,9 @@ class Corrector:
         # and a pass that silently gained a second source of edits would make
         # those rows say something they were never asked.
         self.mechanical = mechanical
+        # The second wave. Off by default for the same reason as `mechanical`:
+        # every row above was measured without it.
+        self.verify = verify
         # Only ever reached through `blocks_per_call` or `window_blocks`; the
         # whole-document path is one call and has nothing to overlap. Defaults
         # to 1 so that turning either on does not change two things at once.
@@ -264,7 +304,58 @@ class Corrector:
             result = self._correct_batched(text, spans, self.blocks_per_call)
         else:
             result = self._correct_whole(text, spans)
+        if self.verify:
+            # Before the rules go in, not after: the rule pack scores P 0.969 on
+            # its eight types and there is nothing for a verifier to buy there,
+            # while every call it would spend is a call in the critical path.
+            result = self._verified(text, spans, result)
         return self._with_rules(text, result) if self.mechanical else result
+
+    def _verified(self, text, spans, result):
+        """Ask about each proposed edit on its own, and keep the ones confirmed.
+
+        One call per candidate rather than one per window, because the calls
+        are then independent of each other and of how many candidates a window
+        happened to produce — the whole wave is one round trip whatever the
+        document did, and a document with forty candidates costs the same wall
+        clock as one with four.
+
+        A verifier call that fails is a vote to **keep**. The edit already
+        cleared the pass that proposed it; dropping it because a second opinion
+        never arrived would let a transient 500 quietly cost recall, and that is
+        the one direction this milestone cannot afford to lose silently.
+        """
+        if not result.edits:
+            return result
+
+        users = [
+            PROPOSAL.format(
+                context=render(text, *_around(spans, edit, self.context_blocks)),
+                block=_block_of(spans, edit),
+                original=edit.before(text),
+                replacement=edit.replacement,
+            )
+            for edit in result.edits
+        ]
+        kept, rejected = [], Counter(result.rejected)
+        for edit, (reply, failure, seconds) in zip(
+            result.edits, self._fanout(users, VERIFY), strict=True
+        ):
+            if failure is not None:
+                result.errors.append(f"verificador: {type(failure).__name__}: {failure}")
+                result.usage.add(Usage(calls=1, seconds=seconds))
+                kept.append(edit)
+                continue
+            result.usage.add(spent(self.model, reply, seconds))
+            if _says_no(reply.text):
+                rejected["unverified"] += 1
+            else:
+                kept.append(edit)
+
+        result.edits = kept
+        result.rejected = dict(rejected)
+        result.skipped = sum(rejected.values())
+        return result
 
     def _with_rules(self, text, result):
         """The rule pack's edits alongside the model's, rules winning any clash.
@@ -482,7 +573,7 @@ class Corrector:
         result.skipped = sum(rejected.values())
         return result
 
-    def _fanout(self, users):
+    def _fanout(self, users, system=None):
         """One reply per user message, in the order they were built.
 
         The calls are independent, so they overlap; what is done with the
@@ -501,7 +592,7 @@ class Corrector:
         def call(user):
             started = time.monotonic()
             try:
-                reply = self._generate(self.model, self.prompt, user)
+                reply = self._generate(self.model, system or self.prompt, user)
             except Exception as exc:
                 return None, exc, time.monotonic() - started
             return reply, None, time.monotonic() - started
@@ -517,6 +608,36 @@ class Corrector:
 # correct, and `shown`/`shown_first` the spans that go into its prompt — the
 # whole document unless `context_blocks` narrows it.
 Window = namedtuple("Window", "first last start end shown shown_first")
+
+
+def _says_no(reply):
+    """Whether the verifier discarded it. Anything unreadable is a vote to keep.
+
+    Same direction as a failed call, and for the same reason: the edit already
+    survived the pass that proposed it, so silence must not be able to delete
+    it. Only an explicit «descartar» does.
+    """
+    head = reply.strip().lstrip("«\"'*").upper()
+    return head.startswith("DESCARTAR")
+
+
+def _around(spans, edit, context):
+    """The blocks to show a verifier, and the number the first of them carries."""
+    index = _block_of(spans, edit) - 1
+    if context is None:
+        return spans, 1
+    low = max(0, index - context)
+    return spans[low : min(len(spans), index + context + 1)], low + 1
+
+
+def _block_of(spans, edit):
+    """The 1-based block the edit falls in; the last one if it sits past the end."""
+    for number, (start, end) in enumerate(spans, 1):
+        if start <= edit.start < end:
+            return number
+    return next(
+        (number for number, (start, _) in enumerate(spans, 1) if edit.start < start), len(spans)
+    )
 
 
 def _windows(text, spans, size, context=None):

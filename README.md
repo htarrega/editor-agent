@@ -52,7 +52,13 @@ python -m evals.run --systems corrector-blocks,rules-only,corrector-fast \
 |---|---|---|---|---|
 | `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 |
 | `corrector-fast` | 0.874 | 0.926 | 0.36 | **2.1** (worst 3.5) |
+| `corrector-gemini` | 0.994¹ | 1.000 | — | 31 |
 | `rules-only` | 0.779 | 0.969 | 0.12 | **0.00** |
+
+¹ one draw on one fragment — the `--repeats 3` run lost 15 of 16 calls to the free tier's
+20-requests-a-day limit. `corrector-gemini` is one call for the whole document and is both
+better and three times faster than today's default; it is not the fast row because 31 s is
+not 5 s. A paid Google key is the single most valuable thing anyone can add here.
 
 42× faster for 0.073 of F0.5 — still about twice the run-to-run spread, so a real loss rather
 than a draw. **The default does not move**: which end a manuscript wants is not something the

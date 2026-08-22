@@ -7,6 +7,7 @@ returns the same ``Reply``, so a pass does not know which provider answered it.
 
 import os
 import threading
+import time
 
 from pydantic import BaseModel
 
@@ -17,6 +18,10 @@ PRICING = {
     "claude-sonnet-5": (3.00, 15.00),
     "claude-opus-5": (5.00, 25.00),
     "claude-haiku-4-5": (1.00, 5.00),
+    # Google's published rate for 2.5 Flash at the time of measuring. Worth
+    # re-checking before a cost claim leans on it: unlike the two above, no run
+    # in this repository has ever been reconciled against a provider invoice.
+    "gemini-2.5-flash": (0.30, 2.50),
 }
 
 # What a call may spend, deliberation included. Raised for one run with
@@ -218,6 +223,67 @@ def tuned_claude(effort=None, thinking=True, max_tokens=None):
         return claude_generate(
             model, system, user, effort=effort, thinking=thinking, max_tokens=max_tokens
         )
+
+    return generate
+
+
+def gemini_generate(model, system, user, thinking_budget=None):
+    """One Gemini call. ``thinking_budget`` is the dial the others call effort.
+
+    0 turns deliberation off outright, a positive number caps it, and ``None``
+    leaves the model to decide. Same axis as DeepSeek's ``reasoning_effort`` and
+    Claude's ``output_config.effort``, and measured the same way: the thinking
+    is billed as output and is most of what a call's wall clock is.
+    """
+
+    def build():
+        from google import genai
+
+        return genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+    from google.genai import types
+
+    client = _client("gemini", build)
+    config = types.GenerateContentConfig(
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        system_instruction=system or None,
+        # Only sent when asked for: a request that carries the field is not the
+        # request that produced a cached row without it.
+        thinking_config=(
+            None
+            if thinking_budget is None
+            else types.ThinkingConfig(thinking_budget=thinking_budget)
+        ),
+    )
+    # The SDK does not retry 429s and the free tier hands them out in bursts.
+    # Same posture as MAX_RETRIES on the other two clients: how many transient
+    # failures survive is part of what a report means.
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(model=model, contents=user, config=config)
+            break
+        except Exception as exc:
+            if "RESOURCE_EXHAUSTED" not in str(exc) or attempt == MAX_RETRIES - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+    candidate = (response.candidates or [None])[0]
+    reason = getattr(candidate, "finish_reason", None)
+    if reason is not None and str(reason).endswith("MAX_TOKENS"):
+        raise RuntimeError("response truncated by max_tokens")
+    usage = response.usage_metadata
+    return Reply(
+        text=response.text or "",
+        input_tokens=usage.prompt_token_count or 0,
+        output_tokens=(usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0),
+        reasoning_tokens=usage.thoughts_token_count or 0,
+    )
+
+
+def bounded_gemini(thinking_budget):
+    """A Gemini client with its deliberation pinned. See ``bounded_deepseek``."""
+
+    def generate(model, system, user):
+        return gemini_generate(model, system, user, thinking_budget=thinking_budget)
 
     return generate
 

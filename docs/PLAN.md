@@ -20,6 +20,20 @@ reachable and it costs a thirteenth of the quality»). The latency question is a
 the frontier is measured at both ends; what is open is which end ships, and that is the
 author's call and not a measurement's.
 
+**The goal it was built against is half met, and the other half is not reachable on the keys
+in this environment.** ≤5 s: met, with 2.9 s to spare. «No quality loss, or negligible»: not
+met — 0.073 is 1.7× the run-to-run spread, so by this document's own rule it is a loss and
+not a draw. Three providers, and each is blocked by something different:
+
+- **DeepSeek** cannot deliberate inside the budget. Over 32 windowed calls at
+  `reasoning_effort=minimal` the *median* call is 8.4 s, so no window size fits — and eight
+  ways of recovering the quality without deliberating were measured and all landed on the
+  same F0.5 (see «Refuted: everything that is not knowledge»).
+- **Anthropic** is ruled out by the author. Before it was, windowed `claude-sonnet-5` measured
+  F 0.994 at 11 s on one fragment.
+- **Gemini** is the live lead and the key is free tier — 20 requests a day. One call scored
+  **0.994 in 31 s**, better and faster than the default.
+
 **One thing here is not a decision and should just be done:** `carta.txt` contains
 `adverti` for `advertí`. H0 requires corpus B to be free of the author's own typos, because
 a system that correctly spots one is scored as having overcorrected. Fix the fragment and
@@ -471,7 +485,10 @@ document is not queued behind the next one (`20260822-132713-rapido2.json`).
 |---|---|---|---|---|---|---|
 | **corrector-blocks** | **0.960** | **0.899** | **0.947** | **0.12** | 0.0643 | ~88 |
 | corrector-fast | 0.926 | 0.713 | 0.874 | 0.36 | 0.1831 | **2.1** (mediana 2.1, peor 3.5) |
+| corrector-fast, second run | 0.907 | 0.735 | 0.867 | 0.24 | 0.1838 | 2.8 |
 | rules-only | 0.969 | 0.436 | 0.779 | 0.12 | **0.0000** | **0.00** |
+
+Run twice on the identical corpus, because one run is a draw: **0.874 and 0.867**.
 
 **42× faster, and it loses 0.073 F0.5** — still nearly twice the run-to-run spread of 0.043,
 so a real loss rather than a draw, but a third smaller than the 0.113 the same system cost
@@ -617,6 +634,70 @@ not the first.
 The rule was already in the system prompt and was already being ignored. What changed is
 where it sits: a model with its deliberation off has one reading, and the last thing it reads
 is what survives into the answer.
+
+### Refuted: everything that is not knowledge just moves precision and recall along one curve
+
+Eight shapes were measured at `reasoning_effort=none`, hunting the 0.073 that separates
+`corrector-fast` from the default. Every one of them landed on the same F0.5, and moved
+precision and recall against each other to get there:
+
+| | P | R | F0.5 |
+|---|---|---|---|
+| plain windowed pass | 0.901 | 0.774 | 0.872 |
+| brief narrowed to what no rule decides | 0.926 | 0.713 | 0.874 |
+| a scratchpad in the answer (`sidra`) | **1.000** | 0.657 | 0.906 |
+| the same scratchpad (`hierro`) | 0.955 | **0.412** | 0.755 |
+| a verifier as a second wave (`sidra`) | 0.957 | 0.629 | 0.866 |
+| the same verifier (`hierro`) | 0.962 | 0.490 | 0.806 |
+| union of two draws | 0.909 | 0.857 | 0.898 |
+| 2-of-3 majority vote | 0.871 | 0.771 | 0.849 |
+
+**Precision is cheap and recall is not.** Any instruction that makes the model careful buys
+precision immediately and pays for it in recall at a worse rate; F0.5 does not move outside
+the 0.043 spread in either direction. The scratchpad is the clearest case — asking the model
+to write its checks out before answering took `sidra` to **P 1.000**, and took `hierro`'s
+recall to 0.412.
+
+**Only one thing has ever moved the curve rather than slid along it: knowledge from outside
+the model.** The rule pack is +0.040 F0.5 and the dictionary another +0.038, and both of them
+add facts the model does not have to infer. Nothing that re-arranges what the model already
+does has been worth anything.
+
+That is also the epitaph for H2. The verifier was un-dropped here on a sound premise — its
+original reason for dying was that the default left almost nothing to verify, and
+`corrector-fast` restores the false positives it exists to remove. It removes them, exactly
+as designed, and takes true positives with them at a worse ratio. **H2 has now died three
+times, of a different cause each time.**
+
+### Finding: Gemini is faster *and* better than the default, and the key cannot run it
+
+`GOOGLE_API_KEY` was in the environment throughout and nobody had tried it. One call, the
+whole document, deliberation left to the model, with the rule pack alongside — on `sidra`,
+one draw:
+
+| | F0.5 | P | R | s |
+|---|---|---|---|---|
+| `corrector-blocks` (DeepSeek, the default) | 0.947 | 0.960 | 0.899 | ~88 |
+| **`gemini-2.5-flash`, one call + rules** | **0.994** | **1.000** | **0.971** | **31** |
+
+**Better on quality and three times faster than the default**, which is a strictly better row
+than the one this repository ships — and it is not the answer to this milestone, because 31 s
+is not 5 s.
+
+Two things stop it going further, and only one is about the model:
+
+- **Windowing Gemini loses recall**, 0.971 to 0.657 on `sidra`. That is the opposite of what
+  the same shape did to Sonnet, which *gained* recall from it. Whatever the windowed split
+  costs is model-specific and cannot be assumed from one provider to another.
+- **The key is free tier: 20 requests per day for `gemini-2.5-flash`, and about five
+  concurrent.** A windowed pass wants 16–46 calls for one document. The `--repeats 3` run
+  that would have pinned the 0.994 lost 15 of its 16 calls to `RESOURCE_EXHAUSTED`
+  (`20260822-170106-frontera.json`); that row is void and is kept only as the record of why.
+
+`corrector-gemini` stays registered for whoever has the quota. **The single most valuable
+thing anyone can do to this milestone is put a paid key behind it** and re-measure: a model
+that scores 0.994 in 31 s on one call is the only candidate seen that might carry both halves
+of the goal at once.
 
 ### Refuted: more draws, more context and a bigger model are all the same non-answer
 

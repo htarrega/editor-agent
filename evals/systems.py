@@ -19,6 +19,7 @@ from corrector.llm import (
     PRICING,
     Usage,
     bounded_deepseek,
+    bounded_gemini,
     claude_generate,
     price,
     spent,
@@ -395,6 +396,38 @@ BUILDERS = {
             # seventeen types outright.
             aspects=_comma_or_none(os.environ.get("EVAL_FAST_ASPECTS", "juicio")),
             mechanical=True,
+        ),
+    ),
+    # The other end of the frontier: not the fastest row, the best one. One
+    # call for the whole document on a model whose deliberation is cheap in
+    # wall clock — where DeepSeek spends 88 s to score 0.947, this spends ~31 s
+    # to score higher. It is *not* windowed: Gemini loses recall when the
+    # calls are split (0.971 to 0.657 on `sidra`), which is the opposite of
+    # what Sonnet did, and one call is also all the free tier's rate limit
+    # allows. See docs/PLAN.md.
+    "corrector-gemini": lambda: CorrectorSystem(
+        "corrector-gemini",
+        Corrector(
+            os.environ.get("EVAL_GEMINI_MODEL", "gemini-2.5-flash"),
+            bounded_gemini(_optional_int(os.environ.get("EVAL_GEMINI_THINKING", "none"))),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            mechanical=True,
+        ),
+    ),
+    # `corrector-fast` with the second wave switched on. Registered so the
+    # refutation is reproducible, not because it is a candidate: it buys
+    # precision and pays more recall for it, and costs 2.5 s doing so.
+    "corrector-verified": lambda: CorrectorSystem(
+        "corrector-verified",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_FAST_EFFORT", "none")),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            window_blocks=int(os.environ.get("EVAL_WINDOW_BLOCKS", "4")),
+            context_blocks=_optional_int(os.environ.get("EVAL_WINDOW_CONTEXT", "12")),
+            concurrency=int(os.environ.get("EVAL_WINDOW_CONCURRENCY", "40")),
+            mechanical=True,
+            verify=True,
         ),
     ),
     # The rule pack with no model behind it at all. Not a candidate — it can
