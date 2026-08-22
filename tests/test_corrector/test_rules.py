@@ -134,5 +134,56 @@ class EveryEditIsTyped(unittest.TestCase):
         self.assertEqual(starts, sorted(starts))
 
 
+class Spelling(unittest.TestCase):
+    """The dictionary rule. It fires only where a word is not Spanish *and* one
+    minimal repair makes it Spanish — which is what keeps it off the author."""
+
+    def test_a_missing_accent_is_restored(self):
+        self.assertEqual(corrected("Ella corrio hasta alli"), "Ella corrió hasta allí")
+
+    def test_a_missing_initial_h_is_restored(self):
+        self.assertEqual(corrected("era un ombre viejo"), "era un hombre viejo")
+
+    def test_a_b_for_a_v_is_swapped_back(self):
+        self.assertEqual(corrected("no huvo manera"), "no hubo manera")
+
+    def test_an_invented_word_is_left_alone(self):
+        # The whole point. These are the author's, they are not in the
+        # dictionary, and no accent, no h and no b puts them there — so being
+        # unknown is never on its own a reason to touch a word.
+        for word in ("vasu", "pumarada", "merequetengue", "gomitar"):
+            with self.subTest(word=word):
+                self.assertEqual(mechanical_edits(f"tomó el {word} entero"), [])
+
+    def test_an_accent_the_author_wrote_is_never_stripped(self):
+        # `ojalá` and `jamás` are not in the dictionary and `ojala` and `jamas`
+        # are, as forms of `ojalar` and `jamar`. Removing an accent is a claim
+        # about the author's writing and the dictionary cannot make it.
+        self.assertEqual(mechanical_edits("ojalá vuelva"), [])
+        self.assertEqual(mechanical_edits("jamás volvió"), [])
+
+    def test_a_verb_with_pronouns_stuck_to_it_is_not_a_misspelling(self):
+        # `irme` is not in the dictionary and `hirme` is. Without the enclitic
+        # guard every attached-pronoun form in the corpus is a word looking for
+        # a repair, and it finds one.
+        for word in ("irme", "decirle", "contarlo", "dárselo"):
+            with self.subTest(word=word):
+                self.assertEqual(mechanical_edits(f"quiso {word} despacio"), [])
+
+    def test_a_word_two_repairs_from_two_words_is_left_to_the_model(self):
+        # Choosing between them needs the sentence, and reading the sentence is
+        # not something a regular expression does.
+        edits = mechanical_edits("vino el sabado")
+        self.assertTrue(all(edit.kind != "tilde" or edit.replacement == "sábado" for edit in edits))
+
+    def test_a_name_mid_sentence_is_not_a_word_the_dictionary_judges(self):
+        self.assertEqual(mechanical_edits("se lo dijo a Olaya Noriega"), [])
+
+    def test_a_repaired_word_keeps_the_capital_it_needs(self):
+        # Both rules want the same characters: the word is misspelled *and*
+        # opens a sentence. The repair spans the whole word, so it carries both.
+        self.assertEqual(corrected("Se fue. tambien lloró."), "Se fue. También lloró.")
+
+
 if __name__ == "__main__":
     unittest.main()

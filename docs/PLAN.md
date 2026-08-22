@@ -14,20 +14,23 @@ Moving one is a decision that starts with re-measuring, not a refactor.
 
 Read this before starting work; it is the only part of the document that goes stale.
 
-**Next, and it is a decision rather than a build.** `corrector-fast` reaches **2.3 s per
-document against 88 s** and costs **0.113 F0.5** doing it (see «Result: five seconds is
-reachable and it costs a ninth of the quality»). The latency question is answered and the
-frontier is measured at both ends; what is open is which end ships, and that is the author's
-call and not a measurement's. Two ways to close the gap, in order of what they are worth:
+**Next, and it is a decision rather than a build.** `corrector-fast` reaches **2.1 s per
+document against 88 s** and costs **0.073 F0.5** doing it (see «Result: five seconds is
+reachable and it costs a thirteenth of the quality»). The latency question is answered and
+the frontier is measured at both ends; what is open is which end ships, and that is the
+author's call and not a measurement's.
 
-1. **A Spanish dictionary, for the types that are decidable with one.** `tilde`,
-   `ortografia_h` and `ortografia_bv` are 123 of the corpus's 495 seeded errors and
-   `corrector-fast` recalls them at ~0.75; every one of them corrupts a real word into a
-   non-word, so «out of the dictionary, and one accent away from a word that is in it» finds
-   them without a model call. It is blocked on a *dependency*, not on work: `pyspellchecker`'s
-   bundled Spanish list is 86,158 words and does not contain `hubo` or `corrió`, so it is
-   useless here, and a real hunspell `es_ES` pair is a data file with a licence and a
-   deployment story. Ask before adding it.
+**One thing here is not a decision and should just be done:** `carta.txt` contains
+`adverti` for `advertí`. H0 requires corpus B to be free of the author's own typos, because
+a system that correctly spots one is scored as having overcorrected. Fix the fragment and
+record it, and the rule pack's corpus-B score becomes the 0 it should be.
+
+What is left of the gap:
+
+1. ~~A Spanish dictionary~~ — **done**, and it took the gap from 0.113 to 0.073. See «Finding:
+   a dictionary decides three more types». `simplemma` is a pinned pip dependency with
+   bundled data, no network and no system package; `pyspellchecker` was tried first and its
+   Spanish list does not contain `hubo` or `corrió`.
 2. **Hedging the deliberating pass.** Its wall clock is one straggler: over 32 windowed calls
    at `reasoning_effort=minimal` the median is 8.4 s and the slowest 37.8 s. Re-issuing
    whatever is still outstanding at ~12 s should land the *full-quality* pass near 20 s
@@ -454,26 +457,33 @@ latency change in this document and it cost nothing in quality, because it chang
 caps it» explanation were measured honestly and inferred from a variable nobody had thought
 to hold fixed. A ceiling that moves when you change your own client was never the provider's.
 
-### Result: five seconds is reachable and it costs a ninth of the quality
+### Result: five seconds is reachable and it costs a thirteenth of the quality
 
 `corrector-fast` is the answer to «get a document under five seconds». It is three changes
 from the default, and each one is a measurement above rather than a knob turned hopefully:
 the calls split over **responsibility while every one still reads the document**
 (`window_blocks=2`, `context_blocks=12`), the deliberation is **off**
-(`reasoning_effort=none`), and a **rule pack** does the orthotypography the model then cannot
-do. `--repeats 3`, 495 seeded errors, per-document latency taken at `--concurrency 1` so a
+(`reasoning_effort=none`), and a **rule pack** decides eight of the seventeen error types
+without a call — the ones the model then cannot do. `--repeats 3`, 495 seeded errors, per-document latency taken at `--concurrency 1` so a
 document is not queued behind the next one (`20260822-132713-rapido2.json`).
 
 | system | P | R | F0.5 | FP/1k limpio | $ run | **s/documento** |
 |---|---|---|---|---|---|---|
 | **corrector-blocks** | **0.960** | **0.899** | **0.947** | **0.12** | 0.0643 | ~88 |
-| corrector-fast | 0.868 | 0.721 | 0.834 | 0.24 | 0.1711 | **2.3** (peor 3.4) |
-| rules-only | 0.974 | 0.303 | 0.675 | **0.00** | **0.0000** | **0.00** |
+| corrector-fast | 0.926 | 0.713 | 0.874 | 0.36 | 0.1831 | **2.1** (mediana 2.1, peor 3.5) |
+| rules-only | 0.969 | 0.436 | 0.779 | 0.12 | **0.0000** | **0.00** |
 
-**38× faster, and it loses 0.113 F0.5** — nearly three times the run-to-run spread of 0.043,
-so it is a real loss and not a draw. Recall is where it goes: 0.899 to 0.721. Precision holds
-up better than expected (0.868) and overcorrection on clean text stays low (0.24 per 1,000
-words against 0.12), which is the metric the product exists to protect.
+**42× faster, and it loses 0.073 F0.5** — still nearly twice the run-to-run spread of 0.043,
+so a real loss rather than a draw, but a third smaller than the 0.113 the same system cost
+before the dictionary went in (`20260822-132713-rapido2.json`). Recall is where it goes:
+0.899 to 0.713. Precision comes back to 0.926 against the default's 0.960, and overcorrection
+on clean text stays low — 0.36 per 1,000 words against 0.12 — which is the metric the product
+exists to protect.
+
+Sixteen documents, none over 3.5 s and the median at 2.1. The budget was five.
+
+**On two types it beats the default outright**: `comillas` 1.000 against 0.818 and `mayuscula`
+1.000 against 0.854. Both are rule-decided, and both were on H4's target list.
 
 **The 0.113 is the deliberation, and this document has now priced it four ways.** Not a
 prompt, not a pool, not a window: the same tax that `reasoning_effort=none` was refuted for
@@ -490,17 +500,29 @@ Five refutations in this document share a shape — every attempt to get quality
 for deliberation failed. `corrector/rules.py` is the exception, and it is worth being precise
 about why it is not a sixth.
 
-Over `--repeats 3` it recovers **150 of the 495 seeded errors at P 0.974**, and on the 8,254
-words of untouched author prose in corpus B it proposes **zero** edits. It runs in
-microseconds and makes no call.
+Over `--repeats 3` it recovers **216 of the 495 seeded errors at P 0.969**, and on the 8,254
+words of untouched author prose in corpus B it proposes **one** edit. It runs in a few
+milliseconds and makes no call.
 
-| type | rules | `corrector-fast`'s model, alone |
-|---|---|---|
-| `comillas` | **22/22** | 0/2 |
-| `espaciado` | **45/45** | 3/3 |
-| `mayuscula` | **41/41** | 1/3 |
-| `raya_dialogo` | **22/28** | 1/3 |
-| `signo_apertura` | 20/24, and 4 false | 0/3 |
+That one edit is not a false positive. It is `adverti` → `advertí` in `carta.txt`: a
+pre-existing typo in the author's own clean text, which H0 says contaminates the headline and
+asks to be fixed and recorded. The pack found it, and until the fragment is corrected the
+honest reading of corpus B is **0 false positives and 1 real catch**.
+
+| type | rules | seeded | why it is decidable |
+|---|---|---|---|
+| `comillas` | **22/22** | 22 | a straight quote is not a Spanish quotation mark |
+| `espaciado` | **45/45** | 45 | no reading in which a space before a comma is right |
+| `mayuscula` | **41/41** | 41 | a sentence opens with a capital; a month never carries one |
+| `raya_dialogo` | 22/28 | 28 | the dash is a raya, and a hyphen between letters is a hyphen |
+| `signo_apertura` | 20/24, 4 false | 24 | a closing sign closes something that was opened |
+| `tilde` | 24/42 | 42 | *dictionary*: `corrio` is not a word and `corrió` is |
+| `ortografia_bv` | 25/40 | 40 | *dictionary*: `huvo` is not a word and `hubo` is |
+| `ortografia_h` | 17/41 | 41 | *dictionary*: `ombre` is not a word and `hombre` is |
+
+The first five are regular expressions. The last three are a dictionary, and they are the
+half of this milestone that was blocked until `simplemma` turned out to bundle a Spanish word
+list good enough to hold `hubo`, `corrió` and `vendrías` — which `pyspellchecker`'s does not.
 
 The reason it works where the shortcuts failed is that these five types are **decidable**.
 The norm names the character that belongs in the position; a regular expression is not an
@@ -521,6 +543,62 @@ Two guards keep this from being a rule pack that scores well and means nothing:
 Two attempts to have the *model* do this failed first, which is what makes the rules worth
 the code: narrowing a call to ortotipografía alone moved nothing (0/2 `comillas`, 0/3
 `signo_apertura`), and neither did handing it the whole document as context.
+
+### Finding: a dictionary decides three more types, and only because it refuses to guess
+
+The three classes of Spanish misspelling that turn a real word into a **non-word** — a
+dropped accent, a dropped or added `h`, a `b` for a `v` — are 123 of the corpus's 495 seeded
+errors, and `corrector-fast` was recalling them at ~0.75 with a model call each. They do not
+need one: `corrio` is not a word and `corrió` is.
+
+`corrector/rules.py:_spelling` fires only where **the word as written is not a form of
+Spanish and exactly one minimal repair makes it one**. Both halves are load-bearing, and the
+first one alone would have been a disaster: `vasu`, `pumarada`, `fíos`, `gomitar` and
+`merequetengue` are not in the dictionary either. **Being unknown is never on its own a
+reason to touch a word** — the repair is. No accent, no `h` and no `b` turns any of those
+five into a word, so all five are left exactly as the author wrote them, which is the product
+thesis surviving contact with a spellchecker.
+
+It took two goes to make safe, and both failures are worth keeping:
+
+- **Removing an accent is a claim about the author, not about the language.** The dictionary
+  does not hold `ojalá` or `jamás`, but it does hold `ojala` and `jamas` as forms of `ojalar`
+  and `jamar` — so the removal direction proposed stripping the accent off two correct
+  adverbs. Accents are now only ever *added*, which has no symmetric failure.
+- **A verb with pronouns stuck to it is not a misspelling.** `irme` is not in the dictionary
+  and `hirme` is. Without a guard, every `decirle`, `contarlo` and `dárselo` in a Spanish
+  manuscript is a word looking for a repair and finds a bad one. They are caught by taking
+  the pronouns off and asking again.
+
+Together those two took corpus B from 6 false positives back to 1 — and that one is the real
+typo above. The measured effect: **150 → 216 of 495 recovered**, and `corrector-fast` from
+F0.5 0.834 to 0.874 at unchanged latency.
+
+**What it deliberately does not touch.** `tilde_diacritica` (`esta`/`está`) and `homofono`
+(`tuvo`/`tubo`) are pairs of *real* words. A dictionary has nothing to say about either, and
+the rule's «the word is not Spanish» gate means it never fires on them. They stay with the
+model, and they are two of the three types where it still trails the default.
+
+### Refuted: narrowing the model's brief to what no rule decides is a wash
+
+The rule pack owns five of the seventeen types outright, and a model with its deliberation
+off has one reading to spend — so telling it to stop looking for what is already fixed, and
+to spend that reading on the types that need the sentence read, should be free recall. It is
+not. Full corpus, `--repeats 3`, changing only the brief:
+
+| brief | P | R | F0.5 | FP/1k limpio |
+|---|---|---|---|---|
+| everything (`20260822-164300-diccionario.json`) | 0.901 | **0.774** | 0.872 | 0.36 |
+| only what no rule decides (`…-164434-juicio.json`) | **0.926** | 0.713 | **0.874** | 0.36 |
+
+0.002 apart on a metric whose run-to-run spread is 0.043 — a draw, moving precision and
+recall against each other and nothing else. The narrow brief is kept for the precision, since
+F0.5 weights it twice and this document's own rule is that a false positive costs more than a
+missed error; it is not kept because it was shown to work.
+
+**That is now the third shape of «spend the parallelism on quality» to come back a draw**,
+after unioning draws and majority voting. What is left of the gap is the deliberation, and
+nothing that does not deliberate has bought any of it back.
 
 ### Finding: what a non-deliberating model attends to is the end of the prompt
 
@@ -583,9 +661,10 @@ is. Nothing here depends on it and no row in this document is measured on it.
 
 ## H4 — Failure-driven rule pack — **half done**
 
-> **The orthotypographic half is built and measured**: `corrector/rules.py` covers
-> `comillas`, `espaciado`, `mayuscula`, `raya_dialogo` and `signo_apertura`, recovers 150 of
-> 495 seeded errors at P 0.974, and proposes nothing at all on 8,254 words of clean prose.
+> **Built and measured**: `corrector/rules.py` covers `comillas`, `espaciado`, `mayuscula`,
+> `raya_dialogo` and `signo_apertura` by the norm, and `tilde`, `ortografia_h` and
+> `ortografia_bv` by dictionary. It recovers 216 of 495 seeded errors at P 0.969 and proposes
+> one edit on 8,254 words of clean prose — a real typo of the author's, not a false positive.
 > See «Finding: the rule pack is the only thing that ever got quality for free». It is opt-in
 > (`Corrector(mechanical=True)`) and reaches the harness through `corrector-fast` and
 > `rules-only`; `corrector-blocks` is untouched, so every row above still means what it says.
@@ -594,8 +673,9 @@ is. Nothing here depends on it and no row in this document is measured on it.
 > 22/22, against the 14/22 that motivated it. `loismo` is not: it is grammar, not typography,
 > and no regular expression decides it.
 >
-> **What remains is the part a dictionary decides**, and it is blocked on the dependency
-> named in «Where to pick this up» rather than on analysis.
+> **What remains needs the sentence read**: `tilde_diacritica` and `homofono` are pairs of
+> real words, and `loismo` is grammar. No rule and no dictionary decides any of the three,
+> and they are where `corrector-fast` still trails the default.
 
 > **The original note, still true of the types below.** This milestone picks its
 > targets from per-type failures, and at `repeats 1` those counts were 2–16 items carrying

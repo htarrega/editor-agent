@@ -48,17 +48,22 @@ python -m evals.run --systems corrector-blocks,rules-only,corrector-fast \
                                           # or the s/doc column measures queueing
 ```
 
-| | F0.5 | FP/1k on clean text | s per document |
-|---|---|---|---|
-| `corrector-blocks` (default) | **0.947** | 0.12 | ~88 |
-| `corrector-fast` | 0.834 | 0.24 | **2.3** |
+| | F0.5 | P | FP/1k on clean text | s per document |
+|---|---|---|---|---|
+| `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 |
+| `corrector-fast` | 0.874 | 0.926 | 0.36 | **2.1** (worst 3.5) |
+| `rules-only` | 0.779 | 0.969 | 0.12 | **0.00** |
 
-38× faster for 0.113 of F0.5, which is nearly three times the run-to-run spread and so a real
-loss rather than a draw. **The default does not move**: which end a manuscript wants is not
-something the harness can decide. `corrector-fast` splits the calls over responsibility while
-every one of them still reads the whole document, turns the deliberation off, and hands the
-orthotypography to `corrector/rules.py` — a rule pack that recovers 150 of the corpus's 495
-seeded errors at P 0.974, in microseconds, and proposes nothing at all on untouched prose.
+42× faster for 0.073 of F0.5 — still about twice the run-to-run spread, so a real loss rather
+than a draw. **The default does not move**: which end a manuscript wants is not something the
+harness can decide. `corrector-fast` splits the calls over responsibility while every one of
+them still reads the document, turns the deliberation off, and hands eight of the seventeen
+error types to `corrector/rules.py`, which decides them without a model call — five by the
+norm (a straight quote is not a Spanish quotation mark) and three by dictionary (`corrio` is
+not a word and `corrió` is). It recovers **216 of the corpus's 495 seeded errors at P 0.969**
+in a few milliseconds, beats the default outright on `comillas` and `mayuscula`, and leaves
+the author's invented words alone — being absent from the dictionary is never on its own a
+reason to touch a word.
 
 ## Run
 

@@ -101,6 +101,35 @@ ABBREVIATIONS = (
 )
 
 
+# The vowels an accent can land on, and the letters that sound the same. These
+# three are the classes of Spanish misspelling that turn a real word into a
+# non-word — which is exactly the property that makes them decidable without
+# context, and exactly what separates them from `tilde_diacritica` (`esta` and
+# `está` are both words) or `homofono` (`tuvo` and `tubo` are both words).
+# Those two stay with the model, where they belong.
+ACCENTS = {"a": "á", "e": "é", "i": "í", "o": "ó", "u": "ú"}
+UNACCENT = {accented: plain for plain, accented in ACCENTS.items()}
+BV = {"b": "v", "v": "b"}
+
+WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# Below this a minimal repair is not minimal: `de`, `da` and `dé` are three
+# words apart by one accent, and none of them is a misspelling of another.
+MIN_WORD = 4
+
+
+def _known(word):
+    """Whether ``word`` is a form of Spanish. Loaded on first use, not on import.
+
+    `simplemma` reads a few megabytes of language data the first time it is
+    asked, and a process that never corrects anything — the offline test suite,
+    a `--systems null` run — should not pay for it.
+    """
+    import simplemma
+
+    return simplemma.is_known(word, lang="es")
+
+
 def mechanical_edits(text):
     """Every orthotypographic edit the norm decides on its own, in text order.
 
@@ -116,7 +145,39 @@ def mechanical_edits(text):
         *_opening_signs(text),
         *_capitals(text),
     ]
-    return sorted(edits, key=lambda edit: (edit.start, edit.end))
+    return _reconcile(sorted(edits, key=lambda edit: (edit.start, edit.end)), _spelling(text))
+
+
+def _reconcile(edits, spellings):
+    """Fold the spelling repairs in, letting a repaired word keep its capital.
+
+    A word can be both misspelled and sentence-initial — «Tambien» after a full
+    stop wants an accent *and* a capital — and the two edits cover overlapping
+    characters, so `apply_edits` would drop one of them by position. The repair
+    spans the whole word, so it is the one that can carry both: it takes the
+    capital and the capitals rule stands down.
+    """
+    out = list(edits)
+    for repair in spellings:
+        clash = [
+            edit
+            for edit in out
+            if edit.start < repair.end and repair.start < edit.end and edit.kind == "mayuscula"
+        ]
+        if any(
+            edit.kind != "mayuscula"
+            for edit in out
+            if edit.start < repair.end and repair.start < edit.end
+        ):
+            continue
+        for edit in clash:
+            out.remove(edit)
+        if clash:
+            repair = repair.model_copy(
+                update={"replacement": repair.replacement[:1].upper() + repair.replacement[1:]}
+            )
+        out.append(repair)
+    return sorted(out, key=lambda edit: (edit.start, edit.end))
 
 
 def _edit(start, end, replacement, kind, rule):
@@ -214,6 +275,122 @@ def _abbreviated(text, at):
     """
     word = re.search(r"([^\W\d_]+)\.$", text[:at])
     return bool(word) and word.group(1).lower() in ABBREVIATIONS
+
+
+def _spelling(text):
+    """Words that are not Spanish, and are one minimal repair away from being.
+
+    This is a spellchecker's argument, narrowed to the point where it cannot
+    argue with the author. It fires only when the word as written is not a form
+    of Spanish *and* exactly one of the three repairs produces one that is. So
+    `vasu`, `pumarada`, `fíos`, `gomitar` and `merequetengue` — every invented
+    or dialectal word in this corpus — are left alone, because they are not in
+    the dictionary either and no accent, no `h` and no `b` puts them there.
+    Being unknown is never on its own a reason to touch a word; the repair is.
+
+    «Exactly one» is the other half. A word two known repairs away is a word we
+    cannot choose between without reading the sentence, and reading the
+    sentence is the model's job.
+    """
+    edits = []
+    for match in WORD.finditer(text):
+        word = match.group()
+        if len(word) < MIN_WORD or not word.islower() and not _sentence_initial(text, match):
+            # A capital inside a sentence is a name, and a name is not a word
+            # this dictionary has an opinion about.
+            continue
+        lowered = word.lower()
+        if _known(lowered) or _enclitic(lowered):
+            continue
+        repairs = {pair for pair in _repairs(lowered) if _known(pair[0])}
+        if len(repairs) != 1:
+            continue
+        repaired, kind = repairs.pop()
+        edits.append(
+            _edit(
+                match.start(),
+                match.end(),
+                _recase(word, repaired),
+                kind,
+                "palabra inexistente; una enmienda mínima la corrige",
+            )
+        )
+    return edits
+
+
+def _repairs(word):
+    """Every word one accent, one «h» or one b/v away from ``word``, with which.
+
+    The accent is only ever *added*. Taking one away is a claim about the
+    author's own writing rather than about the language, and the dictionary is
+    not good enough to make it: it does not carry `ojalá` or `jamás`, but it
+    does carry `ojala` and `jamas` as forms of `ojalar` and `jamar`, so the
+    removal direction proposes stripping the accent off two perfectly correct
+    adverbs. Adding one has no symmetric failure — a word that gains an accent
+    and becomes a different word is a word the accent belonged to.
+    """
+    out = set()
+    for index, char in enumerate(word):
+        if char in ACCENTS:
+            out.add((word[:index] + ACCENTS[char] + word[index + 1 :], "tilde"))
+        if char in BV:
+            out.add((word[:index] + BV[char] + word[index + 1 :], "ortografia_bv"))
+    out.add(("h" + word, "ortografia_h"))
+    if word.startswith("h"):
+        out.add((word[1:], "ortografia_h"))
+    return {(candidate, kind) for candidate, kind in out if candidate != word}
+
+
+# What can hang off the end of an infinitive or a gerund. The dictionary does
+# not hold these forms — `irme`, `decirle`, `contarlo` are all «unknown» — so
+# without this guard every one of them is a word looking for a repair, and it
+# finds them: `hirme` is in the dictionary and `irme` is not.
+ENCLITICS = (
+    "melo",
+    "mela",
+    "selo",
+    "sela",
+    "selos",
+    "selas",
+    "telo",
+    "tela",
+    "me",
+    "te",
+    "se",
+    "lo",
+    "la",
+    "le",
+    "nos",
+    "os",
+    "los",
+    "las",
+    "les",
+)
+
+
+def _enclitic(word):
+    """Whether ``word`` is a verb with pronouns stuck to it.
+
+    Checked by taking them off: if what is left is a form of Spanish, the word
+    was never misspelled, it was inflected in a way the dictionary does not
+    list.
+    """
+    for suffix in ENCLITICS:
+        if word.endswith(suffix) and len(word) > len(suffix) + 1:
+            stem = word[: -len(suffix)]
+            if _known(stem) or any(_known(stem + vowel) for vowel in ("", "e")):
+                return True
+    return False
+
+
+def _recase(original, repaired):
+    return repaired[:1].upper() + repaired[1:] if original[:1].isupper() else repaired
+
+
+def _sentence_initial(text, match):
+    """Whether the word opens a sentence, where a capital says nothing about it."""
+    before = text[: match.start()].rstrip()
+    return not before or before[-1] in ".!?…:—«\n"
 
 
 def _clause_start(text, at):

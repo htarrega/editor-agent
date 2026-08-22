@@ -390,6 +390,10 @@ BUILDERS = {
             window_blocks=int(os.environ.get("EVAL_WINDOW_BLOCKS", "2")),
             context_blocks=_optional_int(os.environ.get("EVAL_WINDOW_CONTEXT", "12")),
             concurrency=int(os.environ.get("EVAL_WINDOW_CONCURRENCY", "40")),
+            # The model is asked only for what no rule decides. It has one
+            # reading to spend and the rule pack already owns five of the
+            # seventeen types outright.
+            aspects=_comma_or_none(os.environ.get("EVAL_FAST_ASPECTS", "juicio")),
             mechanical=True,
         ),
     ),
@@ -414,6 +418,10 @@ BUILDERS = {
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
 DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-blocks"]
+
+
+def _comma_or_none(value):
+    return [item.strip() for item in value.split(",") if item.strip()] or None
 
 
 def _optional_int(value):

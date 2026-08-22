@@ -23,6 +23,12 @@ dependencies = [
     "pydantic==2.13.4",
     "fastapi==0.116.1",
     "uvicorn[standard]==0.35.0",
+    # The Spanish word list `corrector/rules.py` decides a misspelling against.
+    # Pinned like the rest: which words the dictionary holds is part of what a
+    # measured row means, and it is the difference between «palabra inexistente»
+    # and «palabra del autor». Bundled data, no network and no system package —
+    # which is why it is this and not hunspell.
+    "simplemma==2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -115,6 +115,21 @@ ASPECTS = {
         "dequeísmo, queísmo, laísmo, loísmo y formas verbales inexistentes "
         "(«dijistes» por «dijiste»). Nada de ortografía ni de ortotipografía."
     ),
+    # What no rule decides. `corrector/rules.py` owns comillas, espaciado,
+    # mayúsculas, la raya y los signos de apertura outright — 1.000 recall on
+    # three of them — and a model with its deliberation off has one reading to
+    # spend. This brief spends it on the types that need the sentence read:
+    # every one of them is a pair of real words, or an agreement across a
+    # clause, and no regular expression will ever decide them.
+    "juicio": (
+        "En esta pasada NO buscas ortotipografía —comillas, rayas, signos de "
+        "apertura, espaciado y mayúsculas los corrige una regla aparte y ya están "
+        "resueltos—. Buscas solo lo que exige leer la frase: concordancia de "
+        "género y de número, dequeísmo, queísmo, laísmo, loísmo, formas verbales "
+        "inexistentes («dijistes»), homófonos (haber/a ver, hay/ahí, echo/hecho, "
+        "haya/halla, tuvo/tubo, vaya/valla, sino/si no) y tildes diacríticas "
+        "(el/él, tu/tú, si/sí, mas/más, se/sé, de/dé, aun/aún, solo/sólo)."
+    ),
     "ortotipografía": (
         "En esta pasada buscas SOLO ortotipografía: raya de diálogo (— y no guion "
         "ni menos), comillas latinas («»), signos de apertura (¿ ¡), espacio "
@@ -123,7 +138,7 @@ ASPECTS = {
     ),
 }
 
-MECHANICAL = tuple(ASPECTS)
+MECHANICAL = tuple(name for name in ASPECTS if name != "juicio")
 
 
 class Correction(BaseModel):
