@@ -481,7 +481,24 @@ BUILDERS = {
 # default set: they are the two off-diagonal cells of the prompt × model square,
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
-DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-blocks"]
+#
+# `corrector-raced` is here because it is what the API ships (`EDITOR_AGENT_SYSTEM`,
+# `corrector/presets.py`). `corrector-blocks` stays the reference row — the best
+# F0.5 measured, and what the cached reports quote — so a default run scores both:
+# the row the numbers in docs/PLAN.md are about, and the row a user actually gets.
+# Leaving the shipped one out is how a deployment quietly stops being measured.
+#
+# It is also the row that most needs repeating. `raced` issues each call three
+# times and keeps whichever answers first, so which edits survive is not fixed
+# from run to run — more of its spread is the system than the sampling, and a
+# single draw of it says even less than a single draw of the others.
+DEFAULT_SYSTEMS = [
+    "null",
+    "languagetool",
+    "naive-claude",
+    "corrector-blocks",
+    "corrector-raced",
+]
 
 
 def _hurried(model, system, user):

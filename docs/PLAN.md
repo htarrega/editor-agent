@@ -16,8 +16,8 @@ Every system, measured on the same corpus (4 fragments, 8,254 words, `--repeats 
 
 | system | F0.5 | P | R | FP/1k clean | $/10k words | s/document |
 |---|---|---|---|---|---|---|
-| **`corrector-blocks`** — the default | **0.947** | 0.960 | 0.899 | 0.12 | **0.019** | ~88 |
-| `corrector-raced` | 0.919 / 0.903 | 0.936 | 0.857 | 0.36 / 0.12 | 0.171 | **4.35** (worst 4.78) |
+| **`corrector-blocks`** — the reference row | **0.947** | 0.960 | 0.899 | 0.12 | **0.019** | ~88 |
+| `corrector-raced` — what the API ships | 0.919 / 0.903 | 0.936 | 0.857 | 0.36 / 0.12 | 0.171 | **4.35** (worst 4.78) |
 | `corrector-fast` | 0.867 | 0.904 | 0.745 | 0.24 | 0.056 | 2.4 |
 | `rules-only` | 0.789 | 0.970 | 0.453 | 0.12 | **0** | **0.00** |
 | `corrector-gemini` | 0.994¹ | 1.000 | 0.971 | — | — | 31 |
@@ -26,10 +26,17 @@ Every system, measured on the same corpus (4 fragments, 8,254 words, `--repeats 
 ¹ One draw on one fragment. The `--repeats 3` run lost 15 of 16 calls to a free-tier quota.
 ² Measured on a **different corpus** — see the warning in H0.
 
-**The latency question is closed.** A document can be corrected in under five seconds
-(`corrector-raced`, worst case 4.78 s over 32 documents) for a quality difference of 0.036,
-which is inside the spread this harness can resolve. It costs 9× the money. Whether that
-trade is worth taking is the author's call, so the default has not moved.
+**The latency question is closed, and the trade has been taken.** A document is corrected in
+under five seconds (`corrector-raced`, worst case 4.78 s over 32 documents) for a quality
+difference of 0.036, which is inside the spread this harness can resolve, at 9× the money.
+That was the author's call to make and it has been made: `EDITOR_AGENT_SYSTEM` defaults to
+`raced` and that is what the API ships.
+
+**What the harness measures did not move with it.** `corrector-blocks` is still the row in
+`DEFAULT_SYSTEMS`, still the best F0.5 measured, and still what every cached report quotes.
+Two words that used to name one thing now name two — the reference row and the shipped one —
+and `corrector/presets.py` is where the shipped configurations live, pinned against these
+rows by `tests/test_corrector/test_presets.py` so the pair cannot drift.
 
 ### What to do next
 
@@ -507,7 +514,15 @@ completes with what the rest produced and the failures in `errors`.
 read any path the process could read. `tests/test_api/test_main.py` pins its absence.
 
 Jobs live in the API process's memory: one container, and a restart loses what was in flight.
-Anything more wants a queue, and a queue wants an operational story this does not have.
+Anything more wants a queue, and a queue wants an operational story this does not have. The
+newest 256 are kept and finished ones are dropped past that, because a process meant to stay
+up for days otherwise accumulates every document it has ever corrected. A running job is
+never evicted: that would lose a paid call and leave a poller on an id that never answers.
+
+**A browser front, in `web/`.** React on Vite, its own npm project, sharing no code with the
+API — only the two endpoints above. It always calls `/api` on its own origin: the dev proxy
+rewrites it, and in production the container that serves the API serves the build, so CORS
+never enters and development cannot diverge from what ships. See `web/README.md`.
 
 `EDITOR_AGENT_MAX_WORDS` (2,000) is refused at submit with a `413`. It is a measured ceiling,
 not a policy: above it the pipeline runs where nobody has scored it.

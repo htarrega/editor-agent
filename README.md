@@ -40,8 +40,11 @@ positive, so a pre-existing typo contaminates the headline metric.
 
 ## Speed
 
-The default pass takes **~88 s** on a 2,000-word document, and ~87% of that is the model
-deliberating. `corrector-raced` does the same work in under five.
+**The API ships `corrector-raced`**, which corrects a document in under five seconds.
+`corrector-blocks` — one call for the whole document, ~88 s on 2,000 words, ~87% of it the
+model deliberating — is still the best row measured and still what the harness scores by
+default, so the two words now mean different things below: the *reference* row is `blocks`,
+the *shipped* one is `raced`. `EDITOR_AGENT_SYSTEM` switches between them.
 
 ```bash
 python -m evals.run --systems corrector-blocks,corrector-raced,rules-only \
@@ -50,8 +53,8 @@ python -m evals.run --systems corrector-blocks,corrector-raced,rules-only \
 
 | | F0.5 | P | FP/1k clean | s/document | worst | $/10k words |
 |---|---|---|---|---|---|---|
-| `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
-| **`corrector-raced`** | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
+| `corrector-blocks` (the reference row) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
+| **`corrector-raced`** (shipped) | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
 | `corrector-fast` | 0.867 | 0.904 | 0.24 | 2.4 | 3.5 | 0.056 |
 | `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** | 0.01 | **0.000** |
 
@@ -62,8 +65,20 @@ wins**, under a hard 4.3 s deadline, with a fast no-reasoning ticket queued firs
 block so nothing comes back empty. All 32 measured documents finished under five seconds.
 
 The quality difference is 0.036 against a run-to-run spread of 0.043 — smaller than this
-harness can resolve — and it costs 9× the money. **The default does not move**: that is not
-a trade the harness can make for you. Details and the Gemini lead are in `docs/PLAN.md`.
+harness can resolve — and it costs 9× the money. That trade was never the harness's to make;
+**the author took it**, and `raced` is what the API runs. What the harness measures did not
+move with it: `corrector-blocks` is still what `python -m evals.run` scores by default and
+what every cached report quotes, or the rows would stop meaning what they say.
+
+```bash
+EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app    # back to the reference row
+EDITOR_AGENT_SYSTEM=fast uvicorn api.main:app      # 2.4 s, and 0.867 F0.5
+```
+
+Precision is where the clock is paid for, and it is worth seeing on real prose before
+choosing: on an 834-word fragment `blocks` applied 10 edits and invented none, `raced` found
+13 — three the slow pass missed — and got one wrong, `fast` found 6 and got the same one
+wrong. Details and the Gemini lead are in `docs/PLAN.md`.
 
 ## Run
 
@@ -122,6 +137,25 @@ Jobs live in the process's memory: one container, and a restart loses what was i
 **Nothing authenticates or rate-limits `POST /jobs`, and every call spends money at a
 provider.** Keep it on `127.0.0.1` until that is settled.
 
+`GET /health` answers without touching a provider or building a corrector, so it is safe to
+poll. `POST /correct-file` is gone: it read any path the process could read, and
+`tests/test_api/test_main.py` pins its absence.
+
+## Front
+
+A browser front over the API — paste or upload a manuscript, get it back corrected. It is
+its own npm project and needs the API running beside it:
+
+```bash
+uvicorn api.main:app                     # one terminal
+cd web && npm install && npm run dev     # the other, http://localhost:5173
+```
+
+The front always calls `/api` on its own origin: Vite proxies it to `127.0.0.1:8000` in
+development, and in production the container that serves the API serves the build. No CORS
+in either, and the two situations cannot drift apart. Details in
+[`web/README.md`](web/README.md).
+
 ## Layout
 
 | package | what it is |
@@ -129,7 +163,13 @@ provider.** Keep it on `127.0.0.1` until that is settled.
 | `corrector/` | the pipeline — the product. Imports nothing from `evals/` |
 | `evals/` | the harness that measures it |
 | `api/` | the HTTP wrapper over the pipeline |
+| `web/` | the browser front, over the HTTP wrapper — [`web/README.md`](web/README.md) |
 | `tests/` | `tests/test_corrector/`, `tests/test_evals/` and `tests/test_api/`, mirroring the three |
+
+`web/` is the only part not installed by `pip install -e .`: it is a npm project of its own
+(`cd web && npm install`), ignored by the Python packaging entirely. It talks to `api/`
+across HTTP and shares no code with it, so the two can be built, tested and deployed apart —
+what they do share is the endpoint contract, written down in both READMEs.
 
 Installing the project is what makes `corrector` importable from outside the repository
 root. The test directories carry a `test_` prefix so that neither can ever shadow the

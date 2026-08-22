@@ -89,6 +89,13 @@ and live in `systems.py`; `corrector-blocks` is the pipeline, and lives in `corr
 `corrector-claude` is the same pass on the strong model — not a baseline, a way of
 telling apart what the prompt contributes from what the model does.
 
+A default run scores two rows of the pipeline, not one. `corrector-blocks` is the
+reference — the best F0.5 measured, and what the numbers quoted in `docs/PLAN.md` are
+about. `corrector-raced` is what the API ships (`corrector/presets.py`), and it is here
+so that the deployed configuration cannot quietly stop being measured. Give `raced` its
+`--repeats`: it issues each call three times and keeps the first answer back, so which
+edits survive moves from run to run more than the other rows do.
+
 The corruptor's invariant, checked on every run and in the tests:
 `apply_edits(result.text, result.gold) == result.clean`. If it fails, the run aborts.
 
