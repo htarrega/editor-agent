@@ -15,7 +15,7 @@ Moving one is a decision that starts with re-measuring, not a refactor.
 Read this before starting work; it is the only part of the document that goes stale.
 
 **Next, and it is a decision rather than a build.** `corrector-fast` reaches **2.1 s per
-document against 88 s** and costs **0.073 F0.5** doing it (see «Result: five seconds is
+document against 88 s** and costs **0.080 F0.5** doing it (see «Result: five seconds is
 reachable and it costs a thirteenth of the quality»). The latency question is answered and
 the frontier is measured at both ends; what is open is which end ships, and that is the
 author's call and not a measurement's.
@@ -484,20 +484,20 @@ document is not queued behind the next one (`20260822-132713-rapido2.json`).
 | system | P | R | F0.5 | FP/1k limpio | $ run | **s/documento** |
 |---|---|---|---|---|---|---|
 | **corrector-blocks** | **0.960** | **0.899** | **0.947** | **0.12** | 0.0643 | ~88 |
-| corrector-fast | 0.926 | 0.713 | 0.874 | 0.36 | 0.1831 | **2.1** (mediana 2.1, peor 3.5) |
-| corrector-fast, second run | 0.907 | 0.735 | 0.867 | 0.24 | 0.1838 | 2.8 |
-| rules-only | 0.969 | 0.436 | 0.779 | 0.12 | **0.0000** | **0.00** |
+| corrector-fast | 0.904 | 0.745 | 0.867 | 0.24 | 0.1837 | **2.4** (peor 3.5) |
+| rules-only | 0.970 | 0.453 | 0.789 | 0.12 | **0.0000** | **0.00** |
 
-Run twice on the identical corpus, because one run is a draw: **0.874 and 0.867**.
+Run four times on the identical corpus, because one run is a draw: **0.874, 0.867, 0.862,
+0.867**.
 
-**42× faster, and it loses 0.073 F0.5** — still nearly twice the run-to-run spread of 0.043,
+**37× faster, and it loses 0.080 F0.5** — still nearly twice the run-to-run spread of 0.043,
 so a real loss rather than a draw, but a third smaller than the 0.113 the same system cost
 before the dictionary went in (`20260822-132713-rapido2.json`). Recall is where it goes:
 0.899 to 0.713. Precision comes back to 0.926 against the default's 0.960, and overcorrection
 on clean text stays low — 0.36 per 1,000 words against 0.12 — which is the metric the product
 exists to protect.
 
-Sixteen documents, none over 3.5 s and the median at 2.1. The budget was five.
+Sixteen documents, none over 3.5 s. The budget was five.
 
 **On two types it beats the default outright**: `comillas` 1.000 against 0.818 and `mayuscula`
 1.000 against 0.854. Both are rule-decided, and both were on H4's target list.
@@ -560,6 +560,56 @@ Two guards keep this from being a rule pack that scores well and means nothing:
 Two attempts to have the *model* do this failed first, which is what makes the rules worth
 the code: narrowing a call to ortotipografía alone moved nothing (0/2 `comillas`, 0/3
 `signo_apertura`), and neither did handing it the whole document as context.
+
+### Decision: a rule is kept only if being incomplete is its worst failure
+
+The corpus is four fragments by one author, 8,254 words. Every number in this
+document is measured on it, so a rule tuned until that sample is clean has learned the
+sample rather than the language — and a rule pack is exactly the kind of code that invites
+it, because there is always one more exception to add.
+
+The line drawn here: **an incomplete rule costs recall, a wrong rule costs precision, and
+only the first is acceptable in something that runs on a manuscript nobody has scored.**
+Every rule kept is one whose gaps make it silent rather than wrong:
+
+| rule | worst failure on unseen prose |
+|---|---|
+| `comillas`, `espaciado`, `verbo_2sg`, sentence-initial capital | none — a straight quote, a space before a comma and a `-stes` are wrong in every Spanish text there is |
+| `raya_dialogo` | silence: it only touches a hyphen with whitespace on one side, so `físico-químico` is safe and a missed dash is a missed dash |
+| `tilde`, `ortografia_h`, `ortografia_bv` | silence: the dictionary is general-purpose and the rule needs a repair *into* it, so a word it does not hold is left alone |
+| `ALWAYS_LOWERCASE` (months, weekdays, nationalities) | silence: a closed class, and a name missing from it is simply not corrected |
+| `signo_apertura` | **it can be wrong** — where the `¿` goes is a judgement, and it scores P 0.833. The only rule here that is not safe by construction |
+
+**`tests/test_corrector/test_rules.py:GeneralisesBeyondTheCorpus` is what enforces this.** It
+holds a passage deliberately unlike the corpus — committee minutes, dates, ranges, a
+hyphenated compound, `el agua`/`la mano`/`el problema`, `ojalá`, `jamás`, enclitic verbs,
+`etc.`, a decimal — and the bar is corpus B's: nothing to correct. It runs offline, so a rule
+that would damage a real manuscript fails before a paid run happens.
+
+### Refuted: gender agreement is decidable and was still not worth having
+
+It looked like the biggest prize left — 40 of 495 seeded errors and the model's weakest type
+at R 0.55 — and unlike number it really is decidable: a noun's gender is lexical and the
+determiner is what agrees with it, so «el mesa» has only one reading. Built, it reached
+R 0.725 at **P 1.000** on the corpus, with 0 false positives on corpus B.
+
+It was dropped anyway, for two reasons that only together are decisive:
+
+- **It bought nothing.** `corrector-fast` with it: F0.5 0.862. Without it: 0.867, 0.867,
+  0.874. The model was already finding what the rule found, and the rule's edits displaced
+  the model's rather than adding to them.
+- **Its precision rested on lists, not on the norm.** Getting it from P 0.514 to P 1.000 took
+  a lexicon of `MASCULINE_IN_A`, `FEMININE_IN_O`, `STRESSED_A`, `AMBIGUOUS` and
+  `NOT_A_NOUN` — every one of them a hand-written enumeration, and every gap in them a
+  *wrong* edit rather than a missed one. `el karma`, `la disco`, `el cisma` were not on the
+  list. The corpus cannot tell you what is missing from a list of exceptions, because it only
+  contains the ones it contains.
+
+That is the one rule where being incomplete meant being wrong, and it is the one rule that
+did not survive. Worth recording that the diagnosis needed on the way — that a noun
+lemmatises to its own singular while a verb lemmatises to an infinitive, which is what
+separates «la mesa» from «la repito» — is a genuinely reusable part-of-speech signal, should
+anything here ever need one.
 
 ### Finding: a dictionary decides three more types, and only because it refuses to guess
 

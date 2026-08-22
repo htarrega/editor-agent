@@ -185,5 +185,65 @@ class Spelling(unittest.TestCase):
         self.assertEqual(corrected("Se fue. tambien lloró."), "Se fue. También lloró.")
 
 
+class SecondPersonPreterite(unittest.TestCase):
+    """Spanish has no «-stes». Complete rather than heuristic: there is no verb
+    for which the form is right, so the rule cannot be incomplete."""
+
+    def test_the_analogical_s_goes(self):
+        self.assertEqual(corrected("¿Ya dijistes que sí?"), "¿Ya dijiste que sí?")
+
+    def test_a_real_word_ending_in_stes_is_left_alone(self):
+        # `restes` is the subjunctive of `restar` and a word in its own right.
+        self.assertEqual(mechanical_edits("no restes puntos"), [])
+
+
+class GeneralisesBeyondTheCorpus(unittest.TestCase):
+    """The rules have to hold on prose that is nothing like the eval corpus.
+
+    The corpus is a sample of one author, four fragments and 8,254 words, and
+    every number in docs/PLAN.md is measured on it. A rule tuned until that
+    sample is clean has learned the sample. So this passage is deliberately
+    unlike it — a different register, different subject matter, and one of
+    every construction the rules could plausibly misfire on — and the bar is
+    the same as corpus B's: **nothing to correct**.
+
+    Anything that fails here is a rule that would damage a real manuscript, and
+    it fails before a paid run ever happens.
+    """
+
+    UNLIKE_THE_CORPUS = (
+        "El Consejo aprobó el reglamento el 3 de octubre de 2019 por 27 votos a 4. "
+        "La comisión —presidida entonces por la doctora Alarcón— publicó un informe "
+        "de 412 páginas: «la evidencia es concluyente», concluía.\n"
+        "¿Qué decía el texto? Que el sistema de pesaje ítalo-suizo, vigente desde "
+        "1994-1998, no cumplía la norma UNE 21-302. ¡Y que nadie lo había "
+        "comprobado!\n"
+        "El agua, el alma y el hacha llevan artículo masculino; la mano y la foto "
+        "no. Ni el problema ni el mapa son femeninos, aunque lo parezcan.\n"
+        "Ojalá se resuelva. Jamás se resolvió. Quiso irme a buscar, decirle algo, "
+        "contarlo todo; no supo cómo. Etc. no es una frase.\n"
+        "El pediatra y la pediatra discreparon: 3,50 puntos de diferencia, ni más "
+        "ni menos.\n"
+    )
+
+    def test_nothing_to_correct(self):
+        found = mechanical_edits(self.UNLIKE_THE_CORPUS)
+        self.assertEqual(
+            [(e.kind, e.before(self.UNLIKE_THE_CORPUS), e.replacement) for e in found], []
+        )
+
+    def test_it_still_corrects_real_errors_in_the_same_register(self):
+        # The other half of the bar: conservative is not the same as inert.
+        broken = 'El Consejo aprobo el reglamento ,y dijo "basta" . Cuando llegara?'
+        # `aprobo` stays: the dictionary does not hold `aprobó`, and an
+        # incomplete dictionary costs recall rather than precision. `Cuando`
+        # stays too, on purpose — the interrogative accent is `tilde_diacritica`,
+        # both spellings are words, and no rule decides it.
+        self.assertEqual(
+            corrected(broken),
+            "El Consejo aprobo el reglamento, y dijo «basta». ¿Cuando llegara?",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

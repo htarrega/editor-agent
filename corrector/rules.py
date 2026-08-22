@@ -43,7 +43,10 @@ HYPHEN_AS_DASH = re.compile(
 
 # A space before the mark, or none after it. Both are typing slips rather than
 # choices; neither has a reading in which it is correct.
-SPACE_BEFORE_MARK = re.compile(r"\s+(?=[,;:!?](?:\s|$))")
+# Not «space, mark, space»: a mark can be missing its following space at the
+# same time as carrying a spurious leading one, and the two are separate slips
+# that have to be fixable together.
+SPACE_BEFORE_MARK = re.compile(r"[^\S\n]+(?=[,;:!?.])")
 MISSING_SPACE_AFTER = re.compile(r"(?<=[,;:])(?=[^\s\d,;:.)»\"'\]])")
 
 # Where a question or exclamation may have begun. The opening sign goes at the
@@ -131,7 +134,7 @@ def _known(word):
 
 
 def mechanical_edits(text):
-    """Every orthotypographic edit the norm decides on its own, in text order.
+    """Every edit the language decides on its own, in text order.
 
     Returned as ``Edit`` and not applied here: the pipeline has exactly one
     channel through which text changes (ARCHITECTURE §4), and a correction that
@@ -144,6 +147,7 @@ def mechanical_edits(text):
         *_spacing(text),
         *_opening_signs(text),
         *_capitals(text),
+        *_verb_2sg(text),
     ]
     return _reconcile(sorted(edits, key=lambda edit: (edit.start, edit.end)), _spelling(text))
 
@@ -391,6 +395,23 @@ def _sentence_initial(text, match):
     """Whether the word opens a sentence, where a capital says nothing about it."""
     before = text[: match.start()].rstrip()
     return not before or before[-1] in ".!?…:—«\n"
+
+
+# Spanish second person singular preterite ends in «-ste», never «-stes». The
+# form with the s is analogical from every other second person and is the most
+# frequent non-standard verb form in the language; it is also decidable on
+# sight, which no other agreement error is.
+VERB_2SG = re.compile(r"\b([^\W\d_]{3,}ste)s\b", re.IGNORECASE)
+
+
+def _verb_2sg(text):
+    return [
+        _edit(
+            m.end(1), m.end(0), "", "verbo_2sg", "segunda persona del singular: «-ste», no «-stes»"
+        )
+        for m in VERB_2SG.finditer(text)
+        if _known(m.group(1).lower()) and not _known(m.group(0).lower())
+    ]
 
 
 def _clause_start(text, at):

@@ -51,25 +51,32 @@ python -m evals.run --systems corrector-blocks,rules-only,corrector-fast \
 | | F0.5 | P | FP/1k on clean text | s per document |
 |---|---|---|---|---|
 | `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 |
-| `corrector-fast` | 0.874 | 0.926 | 0.36 | **2.1** (worst 3.5) |
+| `corrector-fast` | 0.867 | 0.904 | 0.24 | **2.4** (worst 3.5) |
 | `corrector-gemini` | 0.994¹ | 1.000 | — | 31 |
-| `rules-only` | 0.779 | 0.969 | 0.12 | **0.00** |
+| `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** |
 
 ¹ one draw on one fragment — the `--repeats 3` run lost 15 of 16 calls to the free tier's
 20-requests-a-day limit. `corrector-gemini` is one call for the whole document and is both
 better and three times faster than today's default; it is not the fast row because 31 s is
 not 5 s. A paid Google key is the single most valuable thing anyone can add here.
 
-42× faster for 0.073 of F0.5 — still about twice the run-to-run spread, so a real loss rather
+37× faster for 0.080 of F0.5 — still about twice the run-to-run spread, so a real loss rather
 than a draw. **The default does not move**: which end a manuscript wants is not something the
 harness can decide. `corrector-fast` splits the calls over responsibility while every one of
 them still reads the document, turns the deliberation off, and hands eight of the seventeen
 error types to `corrector/rules.py`, which decides them without a model call — five by the
 norm (a straight quote is not a Spanish quotation mark) and three by dictionary (`corrio` is
-not a word and `corrió` is). It recovers **216 of the corpus's 495 seeded errors at P 0.969**
+not a word and `corrió` is). It recovers **224 of the corpus's 495 seeded errors at P 0.970**
 in a few milliseconds, beats the default outright on `comillas` and `mayuscula`, and leaves
 the author's invented words alone — being absent from the dictionary is never on its own a
 reason to touch a word.
+
+Every rule in the pack is one whose gaps make it *silent* rather than wrong, because the eval
+corpus is a sample of one author and a rule tuned until that sample is clean has learned the
+sample. `tests/test_corrector/test_rules.py:GeneralisesBeyondTheCorpus` enforces it offline
+against prose deliberately unlike the corpus. A gender-agreement rule that reached P 1.000 on
+the corpus was **dropped** for failing that standard — its precision rested on hand-written
+exception lists, and it bought nothing on top of the model (`docs/PLAN.md`).
 
 ## Run
 
