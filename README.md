@@ -3,7 +3,7 @@
 An autonomous text correction agent, with access to local files and Google Drive.
 
 - Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Milestones and state: [`docs/PLAN.md`](docs/PLAN.md) — start at «Where to pick this up»
+- Milestones and state: [`docs/PLAN.md`](docs/PLAN.md) — start at «Where we are»
 - Evaluation harness: [`evals/README.md`](evals/README.md)
 
 ## Install
@@ -22,7 +22,8 @@ is measured against, and is only called when a run asks for that row.
 
 ```bash
 export DEEPSEEK_API_KEY=...      # the corrector's workhorse
-export ANTHROPIC_API_KEY=...     # strong-model baseline
+export ANTHROPIC_API_KEY=...     # strong-model baseline, only for the rows that ask for it
+export GOOGLE_API_KEY=...        # optional, for `corrector-gemini`
 ```
 
 `corrector/settings.py` holds the three knobs the pipeline reads — `EDITOR_AGENT_MODEL`,
@@ -39,47 +40,37 @@ positive, so a pre-existing typo contaminates the headline metric.
 
 ## Speed
 
-The default pass takes **~88 s** on a 2,000-word document, and about 87% of that is the model
-deliberating (`docs/PLAN.md`, H1). `corrector-fast` is the other end of that trade:
+The default pass takes **~88 s** on a 2,000-word document, and ~87% of that is the model
+deliberating. `corrector-raced` does the same work in under five.
 
 ```bash
-python -m evals.run --systems corrector-blocks,rules-only,corrector-fast \
-       --repeats 3 --concurrency 1        # --concurrency 1: one document at a time,
-                                          # or the s/doc column measures queueing
+python -m evals.run --systems corrector-blocks,corrector-raced,rules-only \
+       --repeats 3 --concurrency 1     # one document at a time, or s/doc measures queueing
 ```
 
-| | F0.5 | P | FP/1k clean | s per document | worst | $/10k words |
+| | F0.5 | P | FP/1k clean | s/document | worst | $/10k words |
 |---|---|---|---|---|---|---|
 | `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
 | **`corrector-raced`** | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
 | `corrector-fast` | 0.867 | 0.904 | 0.24 | 2.4 | 3.5 | 0.056 |
 | `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** | 0.01 | **0.000** |
-| `corrector-gemini` | 0.994¹ | 1.000 | — | 31 | — | — |
 
-`corrector-raced` is the row that meets a five-second budget without giving up the
-deliberation that recall is made of. One block per call at `reasoning_effort=minimal` already
-scores 0.948 on its own — the default's number — but takes 19 s, and all 19 are the tail: the
-median call is 4.3 s and the slowest is 19. So each call is issued **three times at once and
-the first answer wins**, under a hard 4.3 s deadline, with a fast no-reasoning ticket queued
-first for every block so nothing can come back empty. Every one of 32 measured documents
-finished under five seconds, the worst at 4.78, with no failed calls.
+`corrector-raced` gets there without giving up the deliberation that recall is made of. One
+block per call already scores 0.948 on its own but takes 19 s, and all 19 are the tail — the
+median call is 4.3 s. So each call is issued **three times at once and the first answer
+wins**, under a hard 4.3 s deadline, with a fast no-reasoning ticket queued first for every
+block so nothing comes back empty. All 32 measured documents finished under five seconds.
 
-The quality difference is 0.036 against a run-to-run spread of 0.043 — smaller than the noise
-this harness can resolve. It costs 9× the money (still cents, and still 9× cheaper than a
-strong model with a naive prompt). **The default does not move**: 20× the speed for 9× the
-bill is not a trade the harness can make for you.
-
-¹ one draw on one fragment — the `--repeats 3` run lost 15 of 16 calls to the free tier's
-20-requests-a-day limit. `corrector-gemini` is one call for the whole document and is both
-better and three times faster than today's default. A paid Google key is the single most
-valuable thing anyone can add here.
+The quality difference is 0.036 against a run-to-run spread of 0.043 — smaller than this
+harness can resolve — and it costs 9× the money. **The default does not move**: that is not
+a trade the harness can make for you. Details and the Gemini lead are in `docs/PLAN.md`.
 
 ## Run
 
 Nothing below needs a key or the corpus:
 
 ```bash
-python -m unittest discover -s tests -t .    # 130 tests, offline
+python -m unittest discover -s tests -t .    # 217 tests, offline
 ruff format . && ruff check .                # formatting and import order
 ```
 
