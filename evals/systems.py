@@ -439,7 +439,10 @@ BUILDERS = {
             attempts=int(os.environ.get("EVAL_RACE_ATTEMPTS", "3")),
             deadline=float(os.environ.get("EVAL_RACE_DEADLINE", "4.3")),
             fallback=_hurried,
-            mechanical=True,
+            # The knob that answers whether the rule pack earns its place in
+            # the row that ships, rather than only in the one that does not
+            # deliberate. `EVAL_RACE_RULES=0` is the control.
+            mechanical=os.environ.get("EVAL_RACE_RULES", "1") != "0",
         ),
     ),
     # `corrector-fast` with the second wave switched on. Registered so the

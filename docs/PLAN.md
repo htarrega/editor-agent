@@ -154,6 +154,31 @@ anchored edits— and for the product not being "a better model" but a pipeline 
 applicable edits. It is recorded here and in
 `evals/results/20260817-211125-claude-4frag.json`; we do not pay for it again on every run.
 
+### Warning: `naive-claude` has never been measured on the corpus in use
+
+The baseline row quoted throughout this document — F0.5 0.899, FP/1k 2.18, $1.6030 per 10,000
+words — was produced on corpus fingerprint `d5e1ee1f` at **`repeats 1`**, four cases. Every
+row measured since chunking landed uses `656d9e4c` at `repeats 3`, twelve cases. `repeats`
+enters the fingerprint by construction, so the two are different corpora and `reuse` refuses
+to mix them; a `--repeats 3` run therefore shows no `naive-claude` row at all unless it pays
+for one, and none ever has.
+
+What can honestly be said today:
+
+- **On overcorrection, cost and latency the comparison is not close and not noise-limited.**
+  2.18 false positives per 1,000 clean words against 0.12; $1.6030 per 10,000 words against
+  $0.019 for the default and $0.171 for `corrector-raced`; ~97 s a call against 4.35 s a
+  document. These are orders of magnitude, and the first of them is the product's own thesis.
+- **On F0.5 the claim rests on H1's pairing**, where both ran on the same corpus:
+  `corrector-v0` 0.929 against 0.899. That +0.030 is *inside* the 0.043 spread and proves
+  nothing alone. What carries it is the six-run study — 0.926, 0.929, 0.942, 0.938, 0.911,
+  0.954, all six above 0.899. Six draws of ours against one of theirs.
+- **`corrector-raced` cannot claim it.** 0.919 and 0.903 against 0.899 is a mean difference
+  of 0.012, well inside the spread, and on a different corpus besides.
+
+Sixteen calls to Claude at `--repeats 3` on the current corpus — about $1.32 — would settle
+it. It is blocked on the author, not on work: Anthropic is ruled out and the balance is spent.
+
 ### The bar H1 has to beat
 
 Corpus of 4 fragments, 8254 words, 165 seeded errors (`seed 0`, `rate 0.02`).
@@ -677,6 +702,48 @@ missed error; it is not kept because it was shown to work.
 **That is now the third shape of «spend the parallelism on quality» to come back a draw**,
 after unioning draws and majority voting. What is left of the gap is the deliberation, and
 nothing that does not deliberate has bought any of it back.
+
+### Finding: the rule pack is worth 0.15 F0.5 to the row that ships, and it is the only part that cannot fail
+
+The pack was built for `corrector-fast`, where the deliberation is off and the model scores
+0/2 on `comillas`. Whether it still earns its place in `corrector-raced` — which *does*
+deliberate, and whose model already reaches 0.818 on `comillas` unaided — was never measured.
+`EVAL_RACE_RULES=0` is the control. Same fragment, back to back:
+
+| | P | R | F0.5 |
+|---|---|---|---|
+| `corrector-raced` | **0.938** | **0.857** | **0.920** |
+| the same, `mechanical=False` | 0.833 | 0.600 | 0.773 |
+
+**0.147 F0.5**, which is larger than the entire gap to the default. The rules are not
+redundant with a deliberating model; they are carrying about a sixth of the quality.
+
+One draw a side rather than `--repeats 3`, so the direction is solid and the third decimal is
+not. It is recorded now because the second half of the finding is worth more than the first
+and arrived by accident.
+
+**The control run returned F0.5 0.000 — all 1,096 calls missed the deadline.** DeepSeek was
+slower that hour (a trivial `minimal` call took 3.15 s against ~1.5 s when the design was
+measured), and with `mechanical=False` there is no floor at all: every window times out and
+the document comes back untouched. With the rules on, the same document still returns the
+224 of 495 they decide, in five milliseconds, whatever the provider is doing.
+
+**That reframes what `corrector/rules.py` is for.** It is not only recall bought without a
+call — it is the only part of this pipeline with no provider behind it, and therefore the
+only part that degrades to *something* rather than to nothing. A deadline needs a floor, and
+this is the floor.
+
+### Warning: the five-second ceiling is deadline plus collection, and the provider moves
+
+`corrector-raced` was measured at a worst case of 4.78 s over 32 documents, and that number
+was taken on a good hour. On the slow hour above the same fragment took **5.0 s**. The bound
+is not the deadline, it is `deadline + 0.5–0.7 s` of collecting what came back, and the
+overhead grows with how much is still in flight when the clock fires.
+
+`EVAL_RACE_DEADLINE` is therefore a promise about the *pass*, not about the wall clock a user
+sees. At 4.3 s it brushes five seconds under load. Anyone who needs the guarantee to hold on
+a bad day should set it to 4.0, which costs a little recall on the slowest blocks and buys
+back the headroom. Nobody has measured what that costs.
 
 ### Finding: what a non-deliberating model attends to is the end of the prompt
 
