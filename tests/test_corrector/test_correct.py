@@ -1,5 +1,7 @@
 import json
 import re
+import threading
+import time
 import unittest
 
 from corrector.blocks import block_spans
@@ -507,6 +509,103 @@ class WindowedCorrectorPass(unittest.TestCase):
     def test_a_windowed_pass_cannot_also_be_a_batched_one(self):
         with self.assertRaises(ValueError):
             Corrector("deepseek-v4-flash", fake(edits_json()), blocks_per_call=2, window_blocks=2)
+
+
+class RacedCorrectorPass(unittest.TestCase):
+    """`attempts` and `deadline`: the same call issued several times, first wins.
+
+    The model's deliberation is a lottery — median 4.3 s, maximum 19 — so the
+    wall clock of a pass is its slowest call and not its average one
+    (docs/PLAN.md). These pin the three properties that turn that into a bound:
+    redundancy, a clock, and a floor that is queued before either.
+    """
+
+    TEXT = "\n".join(f"linea {n} aqui." for n in range(1, 5))
+
+    def corrector(self, answer, **kwargs):
+        """`answer(index, attempt)` decides what each ticket does."""
+        self.calls = []
+        lock = threading.Lock()
+
+        def generate(model, system, user):
+            with lock:
+                attempt = sum(1 for seen in self.calls if seen == user)
+                self.calls.append(user)
+            return answer(user, attempt)
+
+        return Corrector(
+            "deepseek-v4-flash",
+            generate,
+            block_words=None,
+            window_blocks=1,
+            concurrency=16,
+            **kwargs,
+        )
+
+    def test_the_first_answer_wins_and_the_slow_ones_are_not_waited_for(self):
+        edit = {"line": 1, "original": "linea 1", "replacement": "línea 1"}
+
+        def answer(user, attempt):
+            if attempt == 0:
+                time.sleep(5)  # never collected: the deadline fires first
+            return Reply(text=edits_json(edit))
+
+        started = time.monotonic()
+        result = self.corrector(answer, attempts=2, deadline=1.0).correct(self.TEXT)
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertEqual(result.errors, [])
+
+    def test_a_window_with_no_answer_by_the_deadline_is_an_error_not_a_silence(self):
+        # The confusion `parse_edits` refuses to make, one level down: a block
+        # nobody read must not look like a block with nothing wrong in it.
+        def answer(user, attempt):
+            time.sleep(5)
+            return Reply(text=edits_json())
+
+        result = self.corrector(answer, attempts=1, deadline=0.5).correct(self.TEXT)
+        self.assertEqual(result.edits, [])
+        self.assertEqual(len(result.errors), result.usage.calls)
+        self.assertTrue(all("sin respuesta" in e for e in result.errors))
+
+    def test_the_hurried_ticket_is_the_floor_and_never_the_preference(self):
+        # Both come back; the deliberated one has to be the one that is read.
+        def hurried(model, system, user):
+            return Reply(text=edits_json({"line": 1, "original": "aqui", "replacement": "AQUI"}))
+
+        def answer(user, attempt):
+            return Reply(text=edits_json({"line": 1, "original": "aqui", "replacement": "aquí"}))
+
+        result = self.corrector(answer, attempts=1, deadline=2.0, fallback=hurried).correct(
+            self.TEXT
+        )
+        self.assertTrue(result.edits)
+        self.assertTrue(all(edit.replacement == "í" for edit in result.edits))
+
+    def test_the_hurried_ticket_is_read_when_the_deliberated_ones_run_long(self):
+        def hurried(model, system, user):
+            return Reply(text=edits_json({"line": 1, "original": "aqui", "replacement": "aquí"}))
+
+        def answer(user, attempt):
+            time.sleep(5)
+            return Reply(text=edits_json())
+
+        result = self.corrector(answer, attempts=1, deadline=0.8, fallback=hurried).correct(
+            self.TEXT
+        )
+        self.assertTrue(result.edits)
+        self.assertEqual(result.errors, [])
+
+    def test_results_stay_in_window_order(self):
+        # Racing resolves out of order by construction; what is written from it
+        # must not. Same argument as `evals/run.py:correct_all`.
+        def answer(user, attempt):
+            number = re.search(r"bloques \[(\d+)\]", user).group(1)
+            time.sleep(0.05 * (4 - int(number)))
+            return Reply(text=edits_json({"original": f"linea {number}", "replacement": "L"}))
+
+        result = self.corrector(answer, attempts=1, deadline=3.0).correct(self.TEXT)
+        starts = [edit.start for edit in result.edits]
+        self.assertEqual(starts, sorted(starts))
 
 
 if __name__ == "__main__":

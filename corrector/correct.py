@@ -266,6 +266,9 @@ class Corrector:
         aspects=None,
         mechanical=False,
         verify=False,
+        attempts=1,
+        deadline=None,
+        fallback=None,
     ):
         # `block_words=None` is one block per line, which is what H1 measured and
         # what the frozen reference rows in the harness ask for by name.
@@ -288,6 +291,15 @@ class Corrector:
         # The second wave. Off by default for the same reason as `mechanical`:
         # every row above was measured without it.
         self.verify = verify
+        # How many times each call is issued, and how long the whole fan-out
+        # may take. Both default to the shape every row above was measured
+        # with: one attempt, and no clock.
+        self.attempts = attempts
+        self.deadline = deadline
+        # A second, faster way of answering the same call, raced alongside the
+        # first. Never preferred to it — only read for the windows the
+        # deliberated attempts did not deliver in time.
+        self.fallback = fallback
         # Only ever reached through `blocks_per_call` or `window_blocks`; the
         # whole-document path is one call and has nothing to overlap. Defaults
         # to 1 so that turning either on does not change two things at once.
@@ -569,9 +581,21 @@ class Corrector:
                 rejected["duplicate"] += duplicate
             result.edits.extend(kept)
 
+        for reply, seconds in self._drain():
+            result.usage.add(spent(self.model, reply, seconds))
         result.rejected = dict(rejected)
         result.skipped = sum(rejected.values())
         return result
+
+    def _drain(self):
+        """Attempts that came back after their race was already won.
+
+        Read once and cleared: they are paid for and have to reach the cost
+        column, but their edits are the same edits and must not be counted
+        twice.
+        """
+        spare, self._spare = getattr(self, "_spare", []), []
+        return spare
 
     def _fanout(self, users, system=None):
         """One reply per user message, in the order they were built.
@@ -597,10 +621,125 @@ class Corrector:
                 return None, exc, time.monotonic() - started
             return reply, None, time.monotonic() - started
 
+        if self.attempts > 1 or self.deadline:
+            hurried = None
+            if self.fallback is not None:
+
+                def hurried(user):
+                    started = time.monotonic()
+                    try:
+                        reply = self.fallback(self.model, system or self.prompt, user)
+                    except Exception as exc:
+                        return None, exc, time.monotonic() - started
+                    return reply, None, time.monotonic() - started
+
+            return self._race(call, users, hurried)
         if self.concurrency <= 1 or len(users) <= 1:
             return [call(user) for user in users]
         with ThreadPoolExecutor(max_workers=min(self.concurrency, len(users))) as pool:
             return list(pool.map(call, users))
+
+    def _race(self, call, users, hurried=None):
+        """Every call issued ``attempts`` times at once; first answer wins, clock runs.
+
+        This is the shape the measurements above argue for and nothing else
+        does. At `reasoning_effort=minimal` one 50-word call has a **median of
+        4.3 s and a maximum of 19** — the model's deliberation is a lottery, and
+        a pass that waits for every ticket waits for the worst one. Wall clock
+        is therefore not the average call, it is the slowest of sixty-four, and
+        no amount of tuning the average touches it.
+
+        Two things follow, and they are the whole design:
+
+        - **Redundancy beats patience.** The same call issued k times in
+          parallel finishes when the *luckiest* of them does, and the provider
+          sustains 67 concurrent calls, so the copies are free in wall clock.
+        - **The deadline is a promise, not a timeout.** A pass that returns
+          whatever it has at five seconds is bounded *by construction*, where
+          one that usually takes four is bounded by nothing. What a block that
+          misses the deadline costs is recall on that block alone — the rest of
+          the document is unaffected, and the report says how many.
+
+        Losing attempts are still paid for at the provider, so the ones that
+        came back are counted: a cost column that only saw the winners would
+        understate the bill by nearly the redundancy factor.
+        """
+        started = time.monotonic()
+        width = min(self.concurrency, max(1, len(users) * self.attempts))
+        pool = ThreadPoolExecutor(max_workers=width)
+        try:
+            # Submission order is the whole trick, and it is the opposite of
+            # the order preference reads in. The hurried ticket for *every*
+            # window goes in first, so the floor under the deadline is bought
+            # before a single token of redundancy is; only then do the
+            # deliberated attempts queue up behind them, filling whatever
+            # capacity and time is left. Submitted the other way round — every
+            # window's three deliberated attempts before any window's floor —
+            # a long document spends its whole budget on the first third of
+            # itself and the rest comes back empty. That is measured: on the
+            # 2,563-word fragment it took recall from 0.914 to 0.569.
+            #
+            # The pool is bounded well below what a long document would ask
+            # for. Firing 368 calls at a provider that runs 67 does not make
+            # them 368 calls in flight, it makes all of them slower.
+            tickets = {index: [] for index in range(len(users))}
+            if hurried is not None:
+                for index, user in enumerate(users):
+                    tickets[index].append(pool.submit(hurried, user))
+            for _ in range(self.attempts):
+                for index, user in enumerate(users):
+                    tickets[index].append(pool.submit(call, user))
+
+            won, spare = {}, []
+            while len(won) < len(users):
+                for index, tries in tickets.items():
+                    if index in won:
+                        continue
+                    finished = [f for f in tries if f.done()]
+                    usable = [f for f in finished if f.result()[1] is None]
+                    # `tries[0]` is the hurried ticket when there is one, so a
+                    # deliberated answer is anything after it — preferred
+                    # whenever one exists, and the hurried one read only as the
+                    # floor it was submitted to be.
+                    floor = 1 if hurried is not None else 0
+                    thought = [f for f in usable if tries.index(f) >= floor]
+                    if thought:
+                        won[index] = thought[0].result()
+                    elif usable and (self.deadline is None or _out_of_time(started, self.deadline)):
+                        won[index] = usable[0].result()
+                    elif finished and len(finished) == len(tries):
+                        won[index] = finished[0].result()  # every attempt failed
+                if len(won) == len(users):
+                    break
+                if self.deadline and time.monotonic() - started >= self.deadline:
+                    break
+                time.sleep(0.02)
+
+            # The deadline has passed, or everything is in: any window still
+            # holding only its hurried answer takes it now.
+            for index, tries in tickets.items():
+                if index in won:
+                    continue
+                usable = [f for f in tries if f.done() and f.result()[1] is None]
+                if usable:
+                    won[index] = usable[0].result()
+
+            elapsed = time.monotonic() - started
+            for index, tries in tickets.items():
+                for future in tries:
+                    if not future.done():
+                        continue
+                    reply, failure, seconds = future.result()
+                    if failure is None and won.get(index, (None,))[0] is not reply:
+                        spare.append((reply, seconds))
+            self._spare = spare
+            missed = RuntimeError(f"sin respuesta en {self.deadline} s")
+            return [won.get(index, (None, missed, elapsed)) for index in range(len(users))]
+        finally:
+            # Not waited on: the point of the deadline is not to wait for the
+            # attempt that blew it. What is already in flight finishes into a
+            # result nobody reads, which is the price of the bound.
+            pool.shutdown(wait=False, cancel_futures=True)
 
 
 # What one windowed call is responsible for and what it is shown. `start`/`end`
@@ -608,6 +747,10 @@ class Corrector:
 # correct, and `shown`/`shown_first` the spans that go into its prompt — the
 # whole document unless `context_blocks` narrows it.
 Window = namedtuple("Window", "first last start end shown shown_first")
+
+
+def _out_of_time(started, deadline):
+    return time.monotonic() - started >= deadline
 
 
 def _says_no(reply):

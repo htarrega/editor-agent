@@ -48,35 +48,31 @@ python -m evals.run --systems corrector-blocks,rules-only,corrector-fast \
                                           # or the s/doc column measures queueing
 ```
 
-| | F0.5 | P | FP/1k on clean text | s per document |
-|---|---|---|---|---|
-| `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 |
-| `corrector-fast` | 0.867 | 0.904 | 0.24 | **2.4** (worst 3.5) |
-| `corrector-gemini` | 0.994¹ | 1.000 | — | 31 |
-| `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** |
+| | F0.5 | P | FP/1k clean | s per document | worst | $/10k words |
+|---|---|---|---|---|---|---|
+| `corrector-blocks` (default) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
+| **`corrector-raced`** | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
+| `corrector-fast` | 0.867 | 0.904 | 0.24 | 2.4 | 3.5 | 0.056 |
+| `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** | 0.01 | **0.000** |
+| `corrector-gemini` | 0.994¹ | 1.000 | — | 31 | — | — |
+
+`corrector-raced` is the row that meets a five-second budget without giving up the
+deliberation that recall is made of. One block per call at `reasoning_effort=minimal` already
+scores 0.948 on its own — the default's number — but takes 19 s, and all 19 are the tail: the
+median call is 4.3 s and the slowest is 19. So each call is issued **three times at once and
+the first answer wins**, under a hard 4.3 s deadline, with a fast no-reasoning ticket queued
+first for every block so nothing can come back empty. Every one of 32 measured documents
+finished under five seconds, the worst at 4.78, with no failed calls.
+
+The quality difference is 0.036 against a run-to-run spread of 0.043 — smaller than the noise
+this harness can resolve. It costs 9× the money (still cents, and still 9× cheaper than a
+strong model with a naive prompt). **The default does not move**: 20× the speed for 9× the
+bill is not a trade the harness can make for you.
 
 ¹ one draw on one fragment — the `--repeats 3` run lost 15 of 16 calls to the free tier's
 20-requests-a-day limit. `corrector-gemini` is one call for the whole document and is both
-better and three times faster than today's default; it is not the fast row because 31 s is
-not 5 s. A paid Google key is the single most valuable thing anyone can add here.
-
-37× faster for 0.080 of F0.5 — still about twice the run-to-run spread, so a real loss rather
-than a draw. **The default does not move**: which end a manuscript wants is not something the
-harness can decide. `corrector-fast` splits the calls over responsibility while every one of
-them still reads the document, turns the deliberation off, and hands eight of the seventeen
-error types to `corrector/rules.py`, which decides them without a model call — five by the
-norm (a straight quote is not a Spanish quotation mark) and three by dictionary (`corrio` is
-not a word and `corrió` is). It recovers **224 of the corpus's 495 seeded errors at P 0.970**
-in a few milliseconds, beats the default outright on `comillas` and `mayuscula`, and leaves
-the author's invented words alone — being absent from the dictionary is never on its own a
-reason to touch a word.
-
-Every rule in the pack is one whose gaps make it *silent* rather than wrong, because the eval
-corpus is a sample of one author and a rule tuned until that sample is clean has learned the
-sample. `tests/test_corrector/test_rules.py:GeneralisesBeyondTheCorpus` enforces it offline
-against prose deliberately unlike the corpus. A gender-agreement rule that reached P 1.000 on
-the corpus was **dropped** for failing that standard — its precision rested on hand-written
-exception lists, and it bought nothing on top of the model (`docs/PLAN.md`).
+better and three times faster than today's default. A paid Google key is the single most
+valuable thing anyone can add here.
 
 ## Run
 

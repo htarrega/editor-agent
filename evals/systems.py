@@ -21,6 +21,7 @@ from corrector.llm import (
     bounded_deepseek,
     bounded_gemini,
     claude_generate,
+    deepseek_generate,
     price,
     spent,
 )
@@ -414,6 +415,33 @@ BUILDERS = {
             mechanical=True,
         ),
     ),
+    # The row that meets the goal. Everything above trades quality for the
+    # clock; this one buys the clock with redundancy and keeps the
+    # deliberation, which is the only thing that ever bought recall.
+    #
+    # One block per call at `reasoning_effort=minimal` scores F0.5 0.948 on its
+    # own — the default's number — and takes 19 s, all of it the slowest of
+    # sixty-four calls. So each call is issued three times at once and the
+    # first answer wins, under a hard 4.3 s deadline; a fast no-reasoning
+    # ticket goes in first for every block so that nothing can come back empty.
+    # See docs/PLAN.md.
+    "corrector-raced": lambda: CorrectorSystem(
+        "corrector-raced",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_RACE_EFFORT", settings.EFFORT)),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            window_blocks=1,
+            context_blocks=_optional_int(os.environ.get("EVAL_WINDOW_CONTEXT", "12")),
+            # Bounded well below what a long document would ask for: firing 368
+            # calls at a provider that runs 67 does not make them 368 in flight.
+            concurrency=int(os.environ.get("EVAL_RACE_CONCURRENCY", "96")),
+            attempts=int(os.environ.get("EVAL_RACE_ATTEMPTS", "3")),
+            deadline=float(os.environ.get("EVAL_RACE_DEADLINE", "4.3")),
+            fallback=_hurried,
+            mechanical=True,
+        ),
+    ),
     # `corrector-fast` with the second wave switched on. Registered so the
     # refutation is reproducible, not because it is a candidate: it buys
     # precision and pays more recall for it, and costs 2.5 s doing so.
@@ -451,6 +479,16 @@ BUILDERS = {
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
 DEFAULT_SYSTEMS = ["null", "languagetool", "naive-claude", "corrector-blocks"]
+
+
+def _hurried(model, system, user):
+    """The floor under the deadline: the same call with the deliberation off.
+
+    Not a competitor to the deliberated attempts and never preferred to one —
+    it exists so that a block whose three deliberated tickets all ran long
+    still comes back with something rather than nothing.
+    """
+    return deepseek_generate(model, system, user, reasoning_effort="none")
 
 
 def _comma_or_none(value):

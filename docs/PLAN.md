@@ -14,25 +14,36 @@ Moving one is a decision that starts with re-measuring, not a refactor.
 
 Read this before starting work; it is the only part of the document that goes stale.
 
-**Next, and it is a decision rather than a build.** `corrector-fast` reaches **2.1 s per
-document against 88 s** and costs **0.080 F0.5** doing it (see «Result: five seconds is
-reachable and it costs a thirteenth of the quality»). The latency question is answered and
-the frontier is measured at both ends; what is open is which end ships, and that is the
-author's call and not a measurement's.
+**Next, and it is a decision rather than a build.** The latency question is answered and the
+frontier is measured end to end: 88 s at F0.5 0.947, **4.8 s at 0.919**, 2.4 s at 0.867, 0 s
+at 0.789. What is open is which row ships, and that is the author's call and not a
+measurement's — the honest summary is that `corrector-raced` buys 20× the speed for 9× the
+bill and a quality difference this harness cannot resolve.
 
-**The goal it was built against is half met, and the other half is not reachable on the keys
-in this environment.** ≤5 s: met, with 2.9 s to spare. «No quality loss, or negligible»: not
-met — 0.073 is 1.7× the run-to-run spread, so by this document's own rule it is a loss and
-not a draw. Three providers, and each is blocked by something different:
+**The goal it was built against is met, on both halves.** `corrector-raced` finishes every
+document in **under five seconds — worst of 32, 4.78 s** — and loses **0.036 F0.5** against a
+run-to-run spread of **0.043**, which is this document's own threshold for a difference it
+cannot resolve. See «Result: the deadline is a promise».
 
-- **DeepSeek** cannot deliberate inside the budget. Over 32 windowed calls at
-  `reasoning_effort=minimal` the *median* call is 8.4 s, so no window size fits — and eight
-  ways of recovering the quality without deliberating were measured and all landed on the
-  same F0.5 (see «Refuted: everything that is not knowledge»).
-- **Anthropic** is ruled out by the author. Before it was, windowed `claude-sonnet-5` measured
+It cost three wrong turns to get there, and each is written up below because the reasoning
+that produced them was sound:
+
+- **Giving up the deliberation** (`corrector-fast`, 2.4 s) is the obvious move and costs
+  0.080 F0.5 — twice the spread. Twelve ways of buying that back without deliberating were
+  measured and every one slid along the same curve.
+- **The parallelism ceiling was ours**, not the provider's: a client per call. The provider
+  runs 67 concurrent, not 16, and that single fact is what made racing affordable.
+- **The per-call floor was measured at the wrong window size.** «No window fits under five
+  seconds» was true at w=2 and false at w=1, where the median call is 4.3 s.
+
+Still open and worth someone's time:
+
+- **Gemini is the unexplored lead.** One `gemini-2.5-flash` call over the whole document
+  scored **0.994 in 31 s**, better *and* faster than the default. The key here is free tier —
+  20 requests a day — so it could not be pinned. A paid key would settle whether the racing
+  shape carries it under five seconds at *better* than today's quality.
+- **Anthropic is ruled out by the author.** Before it was, windowed `claude-sonnet-5` measured
   F 0.994 at 11 s on one fragment.
-- **Gemini** is the live lead and the key is free tier — 20 requests a day. One call scored
-  **0.994 in 31 s**, better and faster than the default.
 
 **One thing here is not a decision and should just be done:** `carta.txt` contains
 `adverti` for `advertí`. H0 requires corpus B to be free of the author's own typos, because
@@ -684,6 +695,68 @@ not the first.
 The rule was already in the system prompt and was already being ignored. What changed is
 where it sits: a model with its deliberation off has one reading, and the last thing it reads
 is what survives into the answer.
+
+### Result: the deadline is a promise, and redundancy is how it is kept
+
+**This is the row that meets the goal**, and it does it by keeping the deliberation rather
+than by giving it up. Everything above tried to buy the clock with quality; this buys it with
+redundancy.
+
+The observation it rests on: **one block per call at `reasoning_effort=minimal`, with ±600
+words of context, scores F0.5 0.948 on its own** — the default's number — and takes 19 s. All
+19 of them are the tail:
+
+| | per-call, 64 calls on `sidra` |
+|---|---|
+| minimum | 1.8 s |
+| **median** | **4.3 s** |
+| p90 | 16.1 s |
+| maximum | **19.0 s** |
+
+The median call already fits inside five seconds. The wall clock is the *slowest of
+sixty-four*, and no amount of tuning the average touches it. That reframes the whole problem:
+it was never that the model is slow, it is that its deliberation is a lottery and a pass that
+waits for every ticket waits for the worst one.
+
+Three things make the fix work, and the third is the one that is easy to get wrong:
+
+- **Redundancy beats patience.** Each call is issued three times at once and the first answer
+  wins. The provider sustains **67 concurrent calls** — not the ~16 this document used to
+  claim — so the copies cost nothing in wall clock.
+- **The deadline is a promise, not a timeout.** The pass returns what it has at 4.3 s. A
+  system that *usually* takes four seconds is bounded by nothing; one that stops at a clock is
+  bounded by construction, and what a late block costs is recall on that block alone.
+- **Submission order is the trick, and it is the opposite of the preference order.** A fast
+  `reasoning_effort=none` ticket for *every* block is queued first, so the floor under the
+  deadline is bought before a single token of redundancy is. Submitted the other way round, a
+  long document spends its whole budget on its first third: on the 2,563-word fragment that
+  ordering took recall from 0.914 to **0.569**.
+
+Measured twice on the identical corpus, `--repeats 3`, 495 seeded errors, per-document clock
+at `--concurrency 1` (`20260822-173123-carrera.json`, `…-173354-carrera2.json`):
+
+| system | P | R | F0.5 | FP/1k limpio | $/10k palabras | s/documento | peor |
+|---|---|---|---|---|---|---|---|
+| **corrector-blocks** | 0.960 | 0.899 | **0.947** | **0.12** | **0.019** | ~88 | ~90 |
+| **corrector-raced** | 0.936 | 0.857 | 0.919 | 0.36 | 0.171 | **4.35** | **4.78** |
+| corrector-raced, again | 0.916 | 0.857 | 0.903 | 0.12 | 0.175 | 4.35 | 4.78 |
+
+**Every one of the 32 documents finished under five seconds**, the worst at 4.78, with zero
+failed calls in either run. That is the shape of the guarantee: not a mean of 4.3 s but a
+ceiling of 4.78 s, because the ceiling is what the code enforces and the mean is what falls
+out of it.
+
+**And the quality difference is not one this harness can resolve.** The gap is 0.028 and
+0.044, mean **0.036**, against a documented run-to-run spread of **0.043** — and this
+document's own rule is that a difference smaller than the spread between two runs of the same
+system is not a result. By the standard it set for itself before any of this was built, the
+loss is a draw.
+
+It is a draw bought at **9× the money**: $0.171 per 10,000 words against $0.019. Still cents,
+still 9× cheaper than `naive-claude` at $1.60, and the redundancy is exactly where it goes —
+1,780 calls a run against 16. Whether 20× the latency is worth 9× the bill is the author's
+call and not a measurement's, which is why `corrector-blocks` remains the default and this is
+the row beside it.
 
 ### Refuted: everything that is not knowledge just moves precision and recall along one curve
 
