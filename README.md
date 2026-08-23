@@ -113,7 +113,7 @@ curl localhost:8000/api/jobs/<job_id>
 | | |
 |---|---|
 | `POST /api/jobs` | `{"text": ...}` in, a job id out. `400` if empty, `413` over `EDITOR_AGENT_MAX_WORDS` |
-| `GET /api/jobs/{id}` | `status`, and on completion `text`, `applied`, `proposed`, `skipped`, `errors`, `detail` |
+| `GET /api/jobs/{id}` | `status`, and on completion `text`, `applied`, `proposed`, `skipped`, `changes`, `errors`, `detail` |
 | `GET /api/health` | answers without building a corrector or reaching a provider |
 
 This is the one JSON contract, for any programmatic client, and it is not migrated to HTML —
@@ -123,6 +123,10 @@ underneath but answers at the bare paths (`/`, `/jobs`, `/jobs/{id}`) with HTML 
 A job whose every call failed ends `failed` with the reason in `detail`, never `completed`
 carrying the original text: that would be indistinguishable from "no errors found". One that
 lost only some of its calls completes with what the rest produced, failures in `errors`.
+
+`changes` is `applied` spelled out one edit at a time — `original`, `replacement`, `kind`,
+`rule` — widened to its word boundary from whatever minimal span the pipeline actually
+touched, so a one-letter fix reads as the word it landed in rather than a lone character.
 
 The 2,000-word ceiling is measured, not policy — there is no document-level pass yet
 (`docs/PLAN.md`, H5), so above it the pipeline runs where nobody has scored it.
