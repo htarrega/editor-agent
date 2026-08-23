@@ -404,16 +404,14 @@ BUILDERS = {
             precorrect=True,
         ),
     ),
-    # Untested hypothesis, not a candidate — see `corrector/presets.py:bare`
-    # for the full reasoning and why it is not in `DEFAULT_SYSTEMS` or
-    # `corrector.presets.PRESETS`. `corrector-swept` with deliberation off:
-    # the one combination that could plausibly reach an order-of-magnitude
-    # cut, because it is the only row here that removes the ~85-90% of the
-    # bill deliberation spends rather than shaving it. Every prior attempt to
-    # turn deliberation off measured real recall loss (docs/PLAN.md,
-    # "Settled"); this asks whether that finding still holds once the rules
-    # have already cleared out what they can. Run this first, at
-    # `--repeats 3`, before trusting a number for it.
+    # Untested hypothesis, and probably not the one to measure first — see
+    # `corrector-swift`, below, and `corrector/presets.py:bare`. `swept` with
+    # deliberation off, over the *whole document at once*; docs/PLAN.md's own
+    # "Settled" section already has the relevant row, found after this one
+    # was written: at `reasoning_effort=none`, whole-document context scores
+    # P 0.756 against 0.935 windowed. Kept registered rather than deleted —
+    # a documented dead end over a quiet one — but `corrector-swift` is the
+    # better-grounded first thing to run.
     "corrector-bare": lambda: CorrectorSystem(
         "corrector-bare",
         Corrector(
@@ -450,6 +448,27 @@ BUILDERS = {
             # seventeen types outright.
             aspects=_comma_or_none(os.environ.get("EVAL_FAST_ASPECTS", "juicio")),
             mechanical=True,
+        ),
+    ),
+    # Untested, but the best-grounded of the unmeasured candidates — see
+    # `corrector/presets.py:swift`. One line different from `corrector-fast`:
+    # mechanical=True (post-hoc) becomes precorrect=True (pre-applied), same
+    # window/context/effort otherwise, so a measurement of this reads as what
+    # pre-applying the rules did to `fast`'s own 0.867 F0.5, not a new shape
+    # with three things different at once. Run this, not `corrector-bare`,
+    # first — the whole-document shape `bare` uses is the one docs/PLAN.md's
+    # own "Settled" section already found worse at `reasoning_effort=none`.
+    "corrector-swift": lambda: CorrectorSystem(
+        "corrector-swift",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_SWIFT_EFFORT", "none")),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            window_blocks=int(os.environ.get("EVAL_WINDOW_BLOCKS", "2")),
+            context_blocks=_optional_int(os.environ.get("EVAL_WINDOW_CONTEXT", "12")),
+            concurrency=int(os.environ.get("EVAL_WINDOW_CONCURRENCY", "40")),
+            aspects=_comma_or_none(os.environ.get("EVAL_SWIFT_ASPECTS", "juicio")),
+            precorrect=True,
         ),
     ),
     # Tried with a paid key 2026-08-24 and refuted as a candidate: F0.5 0.934

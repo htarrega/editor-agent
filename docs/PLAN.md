@@ -122,29 +122,33 @@ number is `raced` → `blocks`, roughly 2×, with quality *up* — real, and the
 number in this section, but not ten times. Every other measured lever either cost real quality
 for a small saving (`lean`), cost more for worse quality (`gemini`), or is a genuine further win
 that simply is not confirmed yet (`swept`, which would bring the combined figure to roughly
-2.3× if its one draw holds). One cell of the matrix was identified but not reached:
-`corrector-bare` (`swept` with deliberation off) is the only row that removes rather than
-shaves the reasoning-token majority of the bill, and is unmeasured only because the DeepSeek
-key ran out of balance — not because it was tried and found wanting. Everything else tried
-supports 2-2.3×, not ten times, without either sacrificing recall or waiting on a draw this
-session could not pay for; `bare` is the one open question that could still change that,
-in either direction.
+2.3× if its one draw holds). Two more cells of the matrix were identified but not reached, for
+the same external reason (the DeepSeek key ran out of balance, exactly -$0.10, confirmed via
+`/user/balance` rather than inferred from a failed call) — not because either was tried and
+found wanting: `corrector-bare` and `corrector-swift`, the only two rows that remove rather than
+shave the reasoning-token majority of the bill. `bare` was the first attempt and is probably the
+wrong shape for it — whole-document at `reasoning_effort=none`, which "Settled" already logs as
+worse than a window with context. `swift` is the corrected version: `fast`'s own shape, with
+`precorrect` in place of `mechanical`, one line different from a row already measured at F0.5
+0.867. Everything actually tried this session supports 2-2.3×, not ten times, without either
+sacrificing recall or waiting on a draw this session could not pay for; `swift` is the one open
+question grounded enough to change that answer rather than merely hope to.
 
 ### What to do next
 
-0. **Measure `corrector-bare` first, the moment the DeepSeek key has balance again** —
-   `corrector-swept` with `reasoning_effort=none`. It is the one combination not yet tried that
-   removes rather than shaves the ~85-90% of the bill deliberation spends, so it is the one
-   candidate that could plausibly land near an order of magnitude below `raced`
-   ($0.008-0.010/10k words, extrapolating from `swept`'s and `blocks`' own non-reasoning output
-   share). It asks the same question "Settled" already answered no to four times over — whether
-   the model can be trusted without deliberating — but never on text the rules had already
-   cleared, which is a real gap in what "Settled" covers, not a reason to expect a different
-   answer. `--repeats 3` before trusting a number either way; see
-   `corrector/presets.py:bare` for the reasoning and why it is not in `PRESETS`.
+0. **Measure `corrector-swift` first, the moment the DeepSeek key has balance again** —
+   `corrector-fast` (windowed, `reasoning_effort=none`, `context_blocks=12`) with the rule pack
+   moved from post-hoc (`mechanical`) to pre-applied (`precorrect`). One line different from a
+   row already measured at F0.5 0.867, which is as close to a grounded prior as an unmeasured
+   row gets here. `corrector-bare` was the first attempt at this question — deliberation off, on
+   text the rules already cleared — and used the wrong shape for it: whole-document, which
+   "Settled" (below) already logs as *worse* at `reasoning_effort=none` than a window with
+   context (P 0.756 against 0.935). `swift` asks the same question through the shape that
+   finding actually supports. `--repeats 3` before trusting a number either way; see
+   `corrector/presets.py:swift` and `:bare`.
 1. **Confirm `corrector-swept` with a second `--repeats 3` draw**, same key, same balance. If it
    holds, it is the next reversal this file records; if it does not, it joins `lean` as a
-   registered refutation. Lower priority than `bare` only because `bare` is the row that could
+   registered refutation. Lower priority than `swift` only because `swift` is the row that could
    change the magnitude of the answer, not just its confidence.
 2. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
    Claude rate — not re-verified this round either). The baseline this document quotes

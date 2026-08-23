@@ -177,29 +177,24 @@ def swept():
 
 
 def bare():
-    """`swept`, with deliberation off. Not measured — a hypothesis in code,
-    not a candidate; do not ship or quote a number for this without running
-    it first.
+    """`swept`, with deliberation off. Not measured, and — caught after the
+    fact, not before — probably the wrong shape to measure first: see
+    `swift`, below, for why. Kept rather than deleted, on the theory that a
+    documented dead end is worth more than a quiet one; docs/PLAN.md,
+    "Settled" already has the pattern for that.
 
     Every row that keeps deliberation on (`blocks`, `swept`, `lean`) tops out
     around a 15% cut past `blocks`, because the reasoning tokens deliberation
     spends are ~85-90% of the bill everywhere they were measured and none of
     them touched that share. `reasoning_effort=none` is the only switch this
-    codebase has that removes it near-entirely rather than shaving it — which
-    is exactly why `fast` exists and exactly why H1's "Settled" section
-    logs turning it off as a repeated, repeated failure: it finds less *and*
-    overcorrects more, on the raw text. This asks the same question over the
-    text `swept` already cleaned, which nothing here has tried — the failure
-    mode `fast` measured was never isolated from "the model is also being
-    asked about spans the rules would have caught anyway." It may fail the
-    same way anyway; deliberation earning its keep has held up under four
-    different attempts to avoid it (below), which is a strong prior against
-    this one working either. Extrapolating from `swept`'s and `blocks`' own
-    non-reasoning output share (~1,000-1,600 tokens/call), a whole-document
-    pass at zero reasoning tokens would land near $0.008-0.010 per 10k words
-    — inside the order-of-magnitude target, *if* precision and recall survive
-    it, which is the entire open question and the reason this is not
-    `PRICING`'d, presented, or trusted.
+    codebase has that removes it near-entirely rather than shaving it. This
+    asks that question over the whole document, at once — and docs/PLAN.md's
+    "Settled" section already has the relevant measurement, found after this
+    function was written rather than before it: *"At `reasoning_effort=none`,
+    more context is worse: the whole document beside a window scores P 0.756
+    against 0.935 for ±600 words."* That is exactly this function's shape.
+    `swift` asks the same underlying question — deliberation off, on text the
+    rules already cleaned — through the shape that finding actually supports.
     """
     return Corrector(
         model=settings.MODEL,
@@ -236,6 +231,41 @@ def fast():
     )
 
 
+def swift():
+    """`fast`, with the rule pack run first instead of after. Not measured —
+    prepared, and the strongest of the unmeasured candidates, but still a
+    hypothesis; do not ship or quote a number for this without running it.
+
+    One line different from `fast`: `mechanical=True` becomes
+    `precorrect=True`, everything else — windowed, `context_blocks=12`,
+    `reasoning_effort=none` — held exactly fixed, so a measurement of this
+    reads as "what did swapping post-hoc rules for pre-applied ones do to
+    `fast`'s own number," not a new pass with three things different at once.
+
+    This is the corrected version of `bare`: same underlying question
+    (deliberation off, on text the rules already cleaned), asked through the
+    shape docs/PLAN.md's own "Settled" section already found works better at
+    `reasoning_effort=none` — a window with context, not the whole document.
+    `fast`'s measured 0.867 F0.5 is the nearest thing to a prior this has:
+    if pre-applying the rules helps here the way it helped `blocks` become
+    `swept` (recall *up*, not just cost down), this is the one candidate
+    that could plausibly land near both the cost and the quality bar at
+    once. If it does not, that is a real answer too — and a cheaper one to
+    get than `bare`'s, since a failing window fails alone rather than taking
+    the whole document's call down with it.
+    """
+    return Corrector(
+        model=settings.MODEL,
+        generate=bounded_deepseek("none"),
+        block_words=settings.BLOCK_WORDS,
+        window_blocks=2,
+        context_blocks=12,
+        concurrency=40,
+        aspects=["juicio"],
+        precorrect=True,
+    )
+
+
 PRESETS = {
     "blocks": blocks,
     "raced": raced,
@@ -244,13 +274,15 @@ PRESETS = {
     "swept": swept,
 }
 
-# `bare` is deliberately not in `PRESETS`: `EDITOR_AGENT_SYSTEM=bare` would
-# make it selectable in production, and it has never been run once, let
-# alone `--repeats 3`. Reachable from the harness as `corrector-bare`
-# (`evals/systems.py`) for exactly that measurement, and from here as
-# `corrector.presets.bare` for anyone reading this file top to bottom. Move
-# it into this dict, alongside a row in the table above, only after it has
-# numbers — the same rule that governs everything else in this file.
+# `bare` and `swift` are deliberately not in `PRESETS`: `EDITOR_AGENT_SYSTEM`
+# selecting either would put something in production that has never been run
+# once, let alone `--repeats 3`. Reachable from the harness as
+# `corrector-bare` / `corrector-swift` (`evals/systems.py`) for exactly that
+# measurement, and from here as `corrector.presets.bare` / `.swift` for
+# anyone reading this file top to bottom. Move either into this dict,
+# alongside a row in the table above, only after it has numbers — the same
+# rule that governs everything else in this file. Measure `swift` first: see
+# its own docstring for why it is the better-grounded of the two.
 
 
 def build(name):

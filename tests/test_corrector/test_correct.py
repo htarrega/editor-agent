@@ -311,9 +311,78 @@ class PrecorrectedWholePass(unittest.TestCase):
         with self.assertRaises(ValueError):
             Corrector("deepseek-v4-flash", fake(edits_json()), mechanical=True, precorrect=True)
 
-    def test_precorrect_is_not_wired_into_the_windowed_pass(self):
+    def test_precorrect_is_not_wired_into_the_batched_pass(self):
         with self.assertRaises(ValueError):
-            Corrector("deepseek-v4-flash", fake(edits_json()), precorrect=True, window_blocks=1)
+            Corrector("deepseek-v4-flash", fake(edits_json()), precorrect=True, blocks_per_call=1)
+
+
+class PrecorrectedWindowedPass(unittest.TestCase):
+    """`precorrect` combined with `window_blocks` — the shape `bare` needs:
+    narrow context (unlike `_correct_whole_precorrected`) with the rule pack
+    run first (unlike `fast`'s post-hoc `mechanical`)."""
+
+    # Block 1 carries the rule fix (one line 1 rule run shorter, "-1" in the
+    # cleaned text); block 4, two windows later at size=2, carries the
+    # model's own edit — far enough that a remapping bug would show up as a
+    # wrong offset rather than accidentally landing right by symmetry. "bien"
+    # rather than the usual filler avoids also tripping the tilde rule on
+    # "aqui" -> "aquí", which would confound what this class is isolating.
+    TEXT = "Linea 1 , bien.\nLinea 2 bien.\nLinea 3 bien.\nEl vasu bien.\nLinea 5 bien.\n"
+
+    def corrector(self, replies, **kwargs):
+        self.seen = []
+        answers = iter(replies)
+
+        def generate(model, system, user):
+            self.seen.append(user)
+            return Reply(text=next(answers))
+
+        return Corrector(
+            "deepseek-v4-flash",
+            generate,
+            block_words=None,
+            window_blocks=2,
+            precorrect=True,
+            **kwargs,
+        )
+
+    def test_every_call_is_shown_the_cleaned_text(self):
+        self.corrector([edits_json()] * 3).correct(self.TEXT)
+        for call in self.seen:
+            self.assertNotIn("Linea 1 , bien", call)
+            self.assertIn("Linea 1, bien", call)
+
+    def test_a_model_edit_two_windows_past_the_rule_lands_at_the_original_offset(self):
+        item = {"line": 4, "original": "vasu", "replacement": "vaso", "kind": "ortografia_bv"}
+        result = self.corrector([edits_json(), edits_json(item), edits_json()]).correct(self.TEXT)
+        vasu_at = self.TEXT.index("vasu")
+        model_edits = [e for e in result.edits if e.kind == "ortografia_bv"]
+        self.assertEqual(len(model_edits), 1)
+        edit = model_edits[0]
+        self.assertTrue(vasu_at <= edit.start < edit.end <= vasu_at + 4)
+        self.assertEqual(self.TEXT[edit.start : edit.end], "u")
+
+    def test_the_final_text_is_correct_end_to_end(self):
+        item = {"line": 4, "original": "vasu", "replacement": "vaso", "kind": "ortografia_bv"}
+        result = self.corrector([edits_json(), edits_json(item), edits_json()]).correct(self.TEXT)
+        applied, rejected = apply_edits(self.TEXT, result.edits)
+        self.assertEqual(rejected, [])
+        self.assertEqual(
+            applied, "Linea 1, bien.\nLinea 2 bien.\nLinea 3 bien.\nEl vaso bien.\nLinea 5 bien.\n"
+        )
+
+    def test_the_rules_own_edit_is_in_the_result(self):
+        result = self.corrector([edits_json()] * 3).correct(self.TEXT)
+        self.assertTrue(any(e.kind == "espaciado" for e in result.edits))
+
+    def test_an_edit_outside_its_window_is_still_dropped_in_cleaned_coordinates(self):
+        # Block 1's own text survives the rule fix, so this anchor is still
+        # findable; only the window owning block 1 may act on it.
+        item = {"line": 1, "original": "Linea 1", "replacement": "Línea 1"}
+        result = self.corrector([edits_json(item)] * 3).correct(self.TEXT)
+        kept = [e for e in result.edits if e.kind == "otro"]
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(result.rejected.get("out_of_window"), 2)
 
 
 TWO_BLOCKS = "El vasu de sidra.\n—Dijistes que vendrias —dijo el vasu.\n"

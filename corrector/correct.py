@@ -281,8 +281,8 @@ class Corrector:
                 "after the call, overriding a clash, or before it, so there is nothing "
                 "left to clash with"
             )
-        if precorrect and (window_blocks or blocks_per_call):
-            raise ValueError("precorrect is only wired into the whole-document pass")
+        if precorrect and blocks_per_call:
+            raise ValueError("precorrect is not wired into the batched pass")
         self.model = model
         self.prompt = (prompt or PROMPT).format(kinds=kinds_block())
         self.block_words = block_words
@@ -298,9 +298,10 @@ class Corrector:
         # those rows say something they were never asked.
         self.mechanical = mechanical
         # The rule pack pre-applied, so the model never reads what it already
-        # fixed — see `_correct_whole` for what that buys and docs/PLAN.md
-        # for the measurement. An alternative to `mechanical`, not a layer on
-        # top of it: the two cannot both be set (checked above).
+        # fixed — see `_correct_whole_precorrected` and `_correct_windowed`
+        # for what that buys and docs/PLAN.md for the measurement. An
+        # alternative to `mechanical`, not a layer on top of it: the two
+        # cannot both be set (checked above).
         self.precorrect = precorrect
         # The second wave. Off by default for the same reason as `mechanical`:
         # every row above was measured without it.
@@ -628,7 +629,23 @@ class Corrector:
         that many blocks on either side. It exists because the context is
         re-sent per call and therefore is what a windowed pass pays for; a
         pass that does not need the far end of the document should not buy it.
+
+        ``precorrect`` runs the rule pack first, the same trade
+        `_correct_whole_precorrected` makes, applied here instead to the text
+        every window is cut from: windows, offsets and anchors below are all
+        in the *cleaned* text's coordinates, and only the edits that survive
+        are translated back to the caller's own offsets, at the end, by
+        `_remap_to_original`. Everything in between reads exactly as it does
+        without `precorrect` because it is working from `text`/`spans` either
+        way — what differs is only which text those names are bound to.
         """
+        rules = []
+        if self.precorrect:
+            raw_rules = mechanical_edits(text)
+            rules, _ = partition_edits(text, raw_rules)
+            text, _ = apply_edits(text, rules)
+            spans = block_spans(text, self.block_words)
+
         result = Correction()
         rejected = Counter()
         jobs, users = [], []
@@ -684,6 +701,21 @@ class Corrector:
 
         for reply, seconds in self._drain():
             result.usage.add(spent(self.model, reply, seconds))
+
+        if self.precorrect:
+            remapped, clashes = [], 0
+            for edit in result.edits:
+                span = _remap_to_original(edit.start, edit.end, rules)
+                if span is None:
+                    clashes += 1
+                    continue
+                start, end = span
+                remapped.append(edit.model_copy(update={"start": start, "end": end}))
+            if clashes:
+                rejected["clashes_with_rule"] += clashes
+            result.proposed += len(rules)
+            result.edits = sorted(remapped + rules, key=lambda edit: (edit.start, edit.end))
+
         result.rejected = dict(rejected)
         result.skipped = sum(rejected.values())
         return result
