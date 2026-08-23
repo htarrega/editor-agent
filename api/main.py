@@ -8,25 +8,21 @@ Nothing here authenticates or rate-limits, and every submission spends money at
 a provider. Keep it on `127.0.0.1` until that is settled.
 """
 
-from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from api.jobs import Job, JobStore
-from corrector import presets, settings
+from api.jobs import Job
+from api.service import SubmissionError, get_corrector, get_job, submit_job
+from corrector import settings
 from corrector.correct import Corrector
-from corrector.edits import apply_edits
 
 app = FastAPI(
     title="Editor Agent API",
     version="0.1.0",
 )
-
-STORE = JobStore()
 
 # The endpoints live on a router rather than on the app because the app serves
 # them at two prefixes at once. The front always calls `/api` on its own
@@ -37,28 +33,6 @@ STORE = JobStore()
 # situations, instead of a build-time switch that can only be wrong in one of
 # them.
 ROUTER = APIRouter()
-
-# One pass is mostly the model deliberating, so a worker spends its time
-# waiting rather than computing and threads are the right shape for it. The
-# pool is bounded all the same: it is what stops an unauthenticated endpoint
-# from turning N submissions into N simultaneous fan-outs at the provider.
-# Beyond it jobs queue, and a queued job reports `running` — from the front's
-# side "not finished yet" is the same answer either way.
-WORKERS = 4
-
-EXECUTOR = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="correct")
-
-
-@lru_cache
-def get_corrector():
-    """The production corrector, built lazily so importing this module never
-    reaches for a provider client. A FastAPI dependency rather than a
-    module-level value so tests can override it with a fake `generate`.
-
-    Which configuration it is comes from `EDITOR_AGENT_SYSTEM`, and every
-    choice it offers is a row the harness has scored — see `corrector/presets.py`.
-    """
-    return presets.build(settings.SYSTEM)
 
 
 class JobRequest(BaseModel):
@@ -80,34 +54,19 @@ def health():
 
 @ROUTER.post("/jobs", status_code=202, response_model=JobCreated)
 def submit(request: JobRequest, corrector: Corrector = Depends(get_corrector)):
-    # `detail` on these two is shown to the author in the browser verbatim, so
-    # it is written in the language the product is in. The provider's messages
-    # in `errors` are whatever the provider said, and are not translated.
-    if not request.text.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="El texto está vacío.",
-        )
-
-    words = len(request.text.split())
-
-    if words > settings.MAX_WORDS:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"El texto tiene {words} palabras y el máximo son {settings.MAX_WORDS}. "
-                "Divídelo y envía las partes por separado."
-            ),
-        )
-
-    job = STORE.create(words)
-    EXECUTOR.submit(run, job.job_id, request.text, corrector)
-    return job
+    """Validate, create and enqueue via `api.service.submit_job` — see there for
+    what makes a submission valid. This only translates a rejection into the
+    status code the JSON contract has always answered with.
+    """
+    try:
+        return submit_job(request.text, corrector)
+    except SubmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @ROUTER.get("/jobs/{job_id}", response_model=Job)
 def read(job_id: str):
-    job = STORE.get(job_id)
+    job = get_job(job_id)
 
     if job is None:
         raise HTTPException(
@@ -146,56 +105,3 @@ app.include_router(ROUTER)
 app.include_router(ROUTER, prefix="/api", include_in_schema=False)
 
 mount_web(app)
-
-
-def run(job_id, text, corrector):
-    """One correction pass, from a worker thread, recorded in the store.
-
-    Nothing raises out of here: the request that submitted the work is long
-    gone, so an exception has nowhere to go but a thread's traceback, and the
-    poller would sit on `running` forever. Every ending is written to the job.
-    """
-    try:
-        correction = corrector.correct(text)
-    except Exception as exc:
-        # The pipeline records per-call failures rather than raising, so
-        # reaching here is a bug or a broken configuration, not a bad call.
-        STORE.fail(job_id, f"{type(exc).__name__}: {exc}")
-        return
-
-    # A pass whose every call failed must not read as "no errors found" — that
-    # is what an invalid key looked like before: a completed job, applied 0,
-    # and the text handed straight back. `correct` records one error per failed
-    # call and counts one call per attempt, so `errors == calls` is the whole
-    # pass failing, while anything less is per-block mode losing some blocks and
-    # keeping the rest. That is a partial result worth returning, with the
-    # failures still in the body rather than thrown away with it.
-    if correction.errors and len(correction.errors) == correction.usage.calls:
-        STORE.fail(
-            job_id,
-            "; ".join(correction.errors),
-            errors=correction.errors,
-            usage=correction.usage.model_dump(),
-        )
-        return
-
-    corrected_text, apply_rejections = apply_edits(
-        text,
-        correction.edits,
-    )
-
-    rejected = dict(correction.rejected)
-
-    for rejection in apply_rejections:
-        rejected[rejection.reason] = rejected.get(rejection.reason, 0) + 1
-
-    STORE.complete(
-        job_id,
-        text=corrected_text,
-        proposed=correction.proposed,
-        applied=len(correction.edits) - len(apply_rejections),
-        skipped=sum(rejected.values()),
-        rejected=rejected,
-        errors=correction.errors,
-        usage=correction.usage.model_dump(),
-    )
