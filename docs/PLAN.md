@@ -502,9 +502,12 @@ Read a document from Drive, write back the corrected version and the report.
 
 ## Interfaces
 
-**HTTP — submitted and polled, not awaited.** `api/main.py` exposes `POST /jobs` (text in,
-`202` and a job id out), `GET /jobs/{id}` and `GET /health`. A default pass runs 60–90 s and
-a blocking POST that long trips proxy timeouts and, from a browser, looks like a dead server.
+**HTTP — submitted and polled, not awaited.** `api/service.py` exposes `submit_job` and
+`get_job`, the one place either surface validates a submission or looks one up; `api/main.py`
+answers them as JSON at `/api` (`POST /api/jobs`, `202` and a job id out; `GET /api/jobs/{id}`;
+`GET /api/health`), and `api/web.py` answers the same two operations as HTML at the bare paths
+for the browser. A default pass runs 60–90 s and a blocking POST that long trips proxy
+timeouts and, from a browser, looks like a dead server.
 
 A job whose every call failed ends `failed` with the reason in `detail`, because completing
 with the original text reads as "this text is clean". A job that lost only some of its calls
@@ -519,10 +522,11 @@ newest 256 are kept and finished ones are dropped past that, because a process m
 up for days otherwise accumulates every document it has ever corrected. A running job is
 never evicted: that would lose a paid call and leave a poller on an id that never answers.
 
-**A browser front, in `web/`.** React on Vite, its own npm project, sharing no code with the
-API — only the two endpoints above. It always calls `/api` on its own origin: the dev proxy
-rewrites it, and in production the container that serves the API serves the build, so CORS
-never enters and development cannot diverge from what ships. See `web/README.md`.
+**A browser front, server-rendered.** `templates/` (Jinja2) and `static/` (vendored HTMX,
+vanilla CSS/JS) — HTMX makes the requests, the templates render what `Job` already carries,
+and the same process answers both `/api` and the browser's own paths. No separate build, no
+second origin, no CORS. Replaced a React-on-Vite front that shared no code with the API: once
+HTMX covered the same submit/poll/render lifecycle, the case for a second toolchain went with it.
 
 `EDITOR_AGENT_MAX_WORDS` (2,000) is refused at submit with a `413`. It is a measured ceiling,
 not a policy: above it the pipeline runs where nobody has scored it.
