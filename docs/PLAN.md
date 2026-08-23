@@ -13,21 +13,22 @@ Two rules govern everything below, and they outrank any instruction to move fast
 
 Every system, measured on the same corpus (4 fragments, 8,254 words, `--repeats 3`,
 495 seeded errors) unless the row says otherwise. Rows marked ° are 2026-08-17/18;
-`corrector-blocks`, `corrector-raced` and `corrector-lean` were re-measured 2026-08-24
-and are not mixed with the older rows — see "The deadline was a bet" below for why that
-matters.
+everything else is 2026-08-24 and is not mixed with the older rows — see "The deadline
+was a bet" below for why that matters, and "Two bugs" for why the `$/10k` column itself
+changed shape.
 
-| system | F0.5 | P | R | FP/1k clean | $/10k words | s/document |
-|---|---|---|---|---|---|---|
-| **`corrector-blocks`** — reference row, and what the API ships | **0.963** | 0.974 | 0.921 | 0.24 | 0.061 | ~74 |
-| `corrector-lean` — tried as a cost row, refuted | 0.929 | 0.942 | 0.883 | 0.36 | **0.056** | ~68 |
-| `corrector-raced` — no longer shipped | 0.860 | 0.933 | 0.655 | 0.00 | 0.171 | **5.6** |
-| `corrector-fast`° | 0.867 | 0.904 | 0.745 | 0.24 | 0.056 | 2.4 |
-| `rules-only`° | 0.789 | 0.970 | 0.453 | 0.12 | **0** | **0.00** |
-| `corrector-gemini`° | 0.994¹ | 1.000 | 0.971 | — | — | 31 |
-| `naive-claude`° — the baseline² | 0.899 | 0.894 | 0.921 | 2.18 | 1.603 | ~97 |
+| system | F0.5 | P | R | FP/1k clean | $/10k words | s/document | draws |
+|---|---|---|---|---|---|---|---|
+| **`corrector-blocks`** — reference row, and what the API ships | **0.963** | 0.974 | 0.921 | 0.24 | 0.0415 | ~74 | 2 |
+| `corrector-swept` — promising cost row, not shipped | 0.952 | 0.955 | 0.941 | 0.85 | **0.0354** | ~60 | **1** |
+| `corrector-lean` — tried as a cost row, refuted | 0.929 | 0.942 | 0.883 | 0.36 | 0.0378 | ~68 | 1 |
+| `corrector-raced` — no longer shipped | 0.860 | 0.933 | 0.655 | 0.00 | 0.0824 | **5.6** | 1 |
+| `corrector-gemini` — paid key, refuted | 0.934 | 0.934 | 0.937 | — | 0.1066 | 31 | 1 |
+| `corrector-fast`° | 0.867 | 0.904 | 0.745 | 0.24 | 0.056¹ | 2.4 | — |
+| `rules-only`° | 0.789 | 0.970 | 0.453 | 0.12 | **0** | **0.00** | — |
+| `naive-claude`° — the baseline² | 0.899 | 0.894 | 0.921 | 2.18 | 1.603¹ | ~97 | — |
 
-¹ One draw on one fragment. The `--repeats 3` run lost 15 of 16 calls to a free-tier quota.
+¹ Pre-2026-08-16 DeepSeek rate; not directly comparable to the rows above it.
 ² Measured on a **different corpus** — see the warning in H0.
 
 **The deadline was a bet, and 2026-08-24 is the day it did not pay.** `raced`'s whole case
@@ -37,26 +38,78 @@ built on one day's reading of how fast the provider answers. Re-measured `--repe
 `raced` alone and uncontended: **F0.5 0.860, not 0.919** — recall down to 0.655 from 0.857,
 a gap four times the harness's own 0.043 spread, so this is not sampling. The deadline itself
 never moved; more of the three deliberated tickets per block simply stopped beating it, so
-more blocks fell back to the cheap `hurried` answer, which finds less by design. The cost of
-this held almost exactly (0.1706 against the old 0.171 per 10k words) — the redundancy was
-paid for in full either time. What changed is only what it bought.
+more blocks fell back to the cheap `hurried` answer, which finds less by design.
 
 `corrector-blocks` was re-measured the same day, same corpus, no hard deadline to miss:
-F0.5 0.963, cost 0.061 per 10k words. Both numbers moved from the older row — the model's own
-deliberation is not the constant this document has been treating it as — but the comparison
-*between* `blocks` and `raced` on one day holds regardless: `blocks` is both better and
-cheaper, which is not a trade, and `EDITOR_AGENT_SYSTEM` now defaults to it. `raced` stays
-registered, out of `DEFAULT_SYSTEMS`, for whoever still wants the clock and can accept that
-its quality is a bet on the hour rather than a number.
+F0.5 0.963. The comparison *between* `blocks` and `raced` on one day holds regardless of what
+either number would have read on a different day: `blocks` is both better and roughly half
+`raced`'s cost ($0.0415 against $0.0824 per 10k words), which is not a trade, and
+`EDITOR_AGENT_SYSTEM` now defaults to it. `raced` stays registered, out of `DEFAULT_SYSTEMS`,
+for whoever still wants the clock and can accept that its quality is a bet on the hour rather
+than a number.
+
+**Two bugs, found chasing this, neither about which system is faster.**
+
+1. **DeepSeek moved `deepseek-v4-flash` off its flat $0.14/$0.28 rate to peak/off-peak billing
+   on 2026-08-16** — UTC 01:00–04:00 and 06:00–10:00 at $0.44/$1.32, every other hour (most of
+   the day, and every measurement in this section) at $0.22/$0.66. `corrector/llm.py`'s
+   `PRICING` table still had the old flat rate; every run before this fix understated what it
+   actually billed. Fixed in `_deepseek_v4_flash_rate` (`corrector/llm.py`), covered by
+   `tests/test_corrector/test_llm.py` with the hour injectable so the tests do not depend on
+   when they run.
+2. **The harness's `coste$` column (`evals/run.py:summary_row`) prints `usage.cost_usd`
+   directly — the raw total for the whole run, not `$/10k words`.** This document's older rows
+   (`corrector-blocks` 0.019, `corrector-raced` 0.171) read as if they were already
+   per-10k-words; reproducing `blocks`'s the same way this session confirms it was — 0.0612 raw
+   over 33,016 words (8,254 × 1 corpus B + 8,254 × 3 corpus A at `--repeats 3`) normalizes to
+   $0.0185, matching the old row almost exactly. Reproducing `raced`'s the same way does not:
+   0.1706 raw normalizes to $0.0517, not $0.171 — the older `raced` row appears to have quoted
+   the raw total as if it were the per-10k figure, a mismatch this document cannot fully
+   reconstruct now and is flagging rather than guessing at. Every `$/10k` figure from
+   2026-08-24 onward in this file is computed by hand from each report's own `usage`
+   (input/output tokens × the rate that applied ÷ words/10000), not read off the column.
+
+Both bugs point the same direction: **every cost figure this document quoted before
+2026-08-24 understated the real number**, by roughly 2.2× from the pricing change alone and,
+for `raced` specifically, by a further ~3.3× from the units mismatch. Neither bug is about
+`blocks` against `raced`; both rows moved together, so the comparison between them survives.
+What does not survive is any absolute cost claim made before today.
 
 **Tried the same day, on the theory that less to search for is less to deliberate about:**
 `corrector-lean` narrows `blocks`' brief to `juicio` — the types no rule decides — asking
 nothing about the four orthotypographic and three dictionary types the rule pack already
-owns. 6% cheaper than `blocks` (0.056 against 0.061), but real recall lost (0.883 against
+owns. 9% cheaper than `blocks` ($0.0378 against $0.0415), but real recall lost (0.883 against
 0.921, F0.5 0.929 against 0.963) for reasoning-token counts that barely moved (9,318 against
-9,966). A narrower brief bought a less careful read, not a shorter one. Consistent with
-narrowing already being logged as a wash on precision below — here it was spent on cost and
-lost. Registered as `corrector-lean` / `corrector/presets.py:lean`, not shipped.
+9,966 per call). A narrower brief bought a less careful read, not a shorter one. Consistent
+with narrowing already being logged as a wash on precision below — here it was spent on cost
+and lost. Registered as `corrector-lean` / `corrector/presets.py:lean`, not shipped.
+
+**Tried the same day, on a different theory — less to look at, not less to be asked about:**
+`corrector-swept` runs the rule pack *before* the call instead of after (`Corrector`'s new
+`precorrect=True`, replacing `mechanical=True`'s post-hoc override for this shape): the model
+never sees a straight quote, a missing accent on a dictionary word, or any of the other three
+rule-decidable types, because they are already fixed in the text it reads. Its edits resolve
+against that swept text and are translated back to the caller's original offsets by
+`_remap_to_original` (`corrector/correct.py`), which refuses — rather than guesses at — a span
+that lands inside a rule's own replacement. One draw, `--repeats 3`: F0.5 0.952 against
+`blocks`' 0.963 (inside the spread), recall *up* (0.941 against 0.921), at 15% less cost
+($0.0354) and 12% fewer reasoning tokens per call (8,742 against 9,966). An earlier
+single-fragment smoke draw had suggested a far larger cut (reasoning down ~44–62%); at
+full-corpus scale that shrank to this — a reminder that a one-fragment draw is not a
+measurement either. **Not shipped**: this document's own rule is `--repeats 3` twice before a
+result is trusted, and the DeepSeek key ran out of balance
+(`{'error': {'message': 'Insufficient Balance', ...}}`, confirmed not transient) mid-way
+through the follow-up run. Registered as `corrector-swept` / `corrector/presets.py:swept`,
+waiting on a second draw.
+
+**Put a paid key behind Gemini — done, and it settles the question rather than opening it
+further.** The free-tier draws that used to sit in this table (F0.5 0.994, one fragment, one
+call) suggested Gemini might carry both quality and cost at once. Measured `--repeats 3` with a
+paid key: F0.5 0.934 — *below* `blocks`, not above it — at $0.1066 per 10k words, more than
+double `blocks`' cost. Gemini's per-token rate is roughly 8× DeepSeek's on output, and while it
+needed noticeably fewer reasoning tokens per call, not enough fewer to close that gap. One
+call also came back unparseable (`sidra#2: unparseable reply: Extra data...`), the only error
+of the run. Registered as `corrector-gemini`, not a candidate.
 
 **What the harness measures did not move with the reversal.** `corrector-blocks` was already
 the row in `DEFAULT_SYSTEMS` and the best F0.5 measured; it is now also what ships, so the
@@ -64,24 +117,30 @@ two words that used to name two things — the reference row and the shipped one
 again. `corrector/presets.py` is where the shipped configuration lives, pinned against the
 harness's row by `tests/test_corrector/test_presets.py` so the two cannot drift.
 
+**On the order-of-magnitude question this round of work was chasing:** the honest number is
+`raced` → `blocks`, roughly 2×, with quality *up* — real, and the most defensible number in
+this section, but not ten times. Every other lever tried either cost real quality for a small
+saving (`lean`), cost more for worse quality (`gemini`), or is a genuine further win that
+simply is not confirmed yet (`swept`, which would bring the combined figure to roughly 2.3×
+if its one draw holds). Nothing tried supports a claim past that without either sacrificing
+recall or waiting on a draw this session could not pay for.
+
 ### What to do next
 
-1. **Put a paid key behind Gemini.** One `gemini-2.5-flash` call over the whole document
-   scored 0.994 in 31 s — better *and* faster than the default. The free-tier key allows 20
-   requests a day, so it could not be pinned. This is the only candidate that might carry
-   both quality and speed at once.
-2. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32). The baseline
-   this document quotes throughout has never run on it.
+1. **Confirm `corrector-swept` with a second `--repeats 3` draw** the moment the DeepSeek key
+   has balance again. If it holds, it is the next reversal this file records; if it does not,
+   it joins `lean` as a registered refutation.
+2. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
+   Claude rate — not re-verified this round either). The baseline this document quotes
+   throughout has never run on it.
 3. **Fix `carta.txt`.** It contains `adverti` for `advertí`. H0 requires corpus B to be free
    of the author's own typos, because a system that correctly spots one is scored as having
    overcorrected.
 4. **Then H5's manuscript machinery**: name glossary, global consistency pass, overlap at
    the seams, final report.
-5. **`blocks`' own cost moved 3x between 2026-08-17 and 2026-08-24 on an unchanged corpus and
-   config** (0.019 to 0.061 per 10k words), while `raced`'s held flat. One more re-measurement
-   a few days out would say whether that is the provider's reasoning depth drifting under a
-   fixed model name — plausible, and worth knowing before any cost claim in this document is
-   quoted again — or a one-off. Cheap to check, not yet checked twice.
+5. **Reconcile the `raced` units mismatch properly**, if the earlier report or its raw
+   input/output token counts turn up — right now this document can say the old $0.171 does not
+   reproduce from first principles, not why.
 
 ### Blocked on the author, not on work
 

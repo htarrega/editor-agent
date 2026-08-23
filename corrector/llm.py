@@ -8,12 +8,14 @@ returns the same ``Reply``, so a pass does not know which provider answered it.
 import os
 import threading
 import time
+from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
-# USD per million tokens.
+# USD per million tokens. `deepseek-v4-flash`'s pair is the off-peak rate —
+# see `_deepseek_v4_flash_rate` for the peak surcharge `price()` applies.
 PRICING = {
-    "deepseek-v4-flash": (0.14, 0.28),
+    "deepseek-v4-flash": (0.22, 0.66),
     "deepseek-reasoner": (0.55, 2.19),
     "claude-sonnet-5": (3.00, 15.00),
     "claude-opus-5": (5.00, 25.00),
@@ -23,6 +25,27 @@ PRICING = {
     # in this repository has ever been reconciled against a provider invoice.
     "gemini-2.5-flash": (0.30, 2.50),
 }
+
+# DeepSeek moved `deepseek-v4-flash` off its flat rate to peak/off-peak
+# billing on 2026-08-16 — peak is UTC 01:00–04:00 and 06:00–10:00, at exactly
+# double PRICING's off-peak pair. Every cost claim in docs/PLAN.md computed
+# before that date, and any run of this harness before this fix landed, used
+# the old flat $0.14/$0.28 — cheaper than even today's off-peak rate, so
+# every one of them understated what the call actually billed.
+_DEEPSEEK_PEAK_HOURS_UTC = ((1, 4), (6, 10))
+
+
+def _deepseek_v4_flash_rate(now=None):
+    """The rate that applies right now — double `PRICING`'s pair during peak.
+
+    ``now`` is injectable so a test can pin a peak or an off-peak hour
+    without depending on when it happens to run.
+    """
+    hour = (now or datetime.now(timezone.utc)).hour
+    peak = any(start <= hour < end for start, end in _DEEPSEEK_PEAK_HOURS_UTC)
+    rate = PRICING["deepseek-v4-flash"]
+    return (rate[0] * 2, rate[1] * 2) if peak else rate
+
 
 # What a call may spend, deliberation included. Raised for one run with
 # `EVAL_MAX_OUTPUT_TOKENS`: the cap is what a truncated call ran into, so a run
@@ -97,7 +120,7 @@ def price(model, input_tokens, output_tokens):
     # A model missing from PRICING is a config error, not a free run. Cost per
     # run is what the cost claim rests on, so a silent $0.00 is worse than a crash —
     # and `systems.build` catches it before a single paid call goes out.
-    rates = PRICING[model]
+    rates = _deepseek_v4_flash_rate() if model == "deepseek-v4-flash" else PRICING[model]
     return (input_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
 
 

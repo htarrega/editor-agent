@@ -38,20 +38,24 @@ false positive.
 ## Modes
 
 `EDITOR_AGENT_SYSTEM` picks one of four, and an unknown name is an error rather than a
-fallback to the default. Numbers below are 2026-08-24; see `docs/PLAN.md`, "The deadline was
-a bet", for why `blocks` and `raced` are not compared against `fast`'s older row.
+fallback to the default. `$/10k words` is computed from each row's own input/output tokens at
+the rate that actually applied when it ran (`corrector/llm.py`); numbers below are 2026-08-24
+except `fast`'s, which predates a DeepSeek pricing change and is not directly comparable — see
+`docs/PLAN.md`, "The deadline was a bet".
 
 | `EDITOR_AGENT_SYSTEM` | s/document | F0.5 | P | $/10k words | |
 |---|---|---|---|---|---|
-| **`blocks`** | ~74 | **0.963** | 0.974 | 0.061 | **default; what the API ships; best measured** |
-| `lean` | ~68 | 0.929 | 0.942 | **0.056** | tried as a cost row, refuted — see `docs/PLAN.md` |
-| `raced` | **5.6** | 0.860 | 0.933 | 0.171 | no longer shipped — the deadline is a bet on the hour |
-| `fast`¹ | **2.4** | 0.867 | 0.904 | 0.056 | |
+| **`blocks`** | ~74 | **0.963** | 0.974 | 0.0415 | **default; what the API ships; two consistent draws** |
+| `raced` | **5.6** | 0.860 | 0.933 | 0.0824 | no longer shipped — the deadline is a bet on the hour |
+| `fast`¹ | **2.4** | 0.867 | 0.904 | 0.056¹ | |
 
-¹ Not re-measured on 2026-08-24; its row is the older one.
+¹ Not re-measured on 2026-08-24; its row is the pre-2026-08-16 one.
 
-Wall clock per 2,000-word document, `--repeats 3` on the 8,254-word corpus. `rules-only` — no
-model at all — sits under all four at 0.789 F0.5, for 0.00 s and nothing.
+Two more names work with `EDITOR_AGENT_SYSTEM` but are not the default — `lean` (refuted:
+cheaper, real recall lost) and `swept` (promising, one draw, not two — see
+`corrector/presets.py`) — because nothing here becomes the default off less evidence than the
+row it would replace. `rules-only` — no model at all — sits under every row above at 0.789
+F0.5, for 0.00 s and nothing.
 
 ```bash
 uvicorn api.main:app                               # blocks, the default
@@ -60,7 +64,7 @@ EDITOR_AGENT_SYSTEM=fast uvicorn api.main:app
 
 # the rows above, re-measured. One document at a time, or s/document
 # measures queueing rather than the pass.
-python -m evals.run --systems corrector-blocks,corrector-lean,corrector-raced,corrector-fast,rules-only \
+python -m evals.run --systems corrector-blocks,corrector-raced,corrector-fast,rules-only \
        --repeats 3 --concurrency 1
 ```
 
@@ -71,10 +75,19 @@ ticket queued first so no block comes back empty. That bought a quality differen
 harness's own run-to-run spread — on the day it was measured. Re-measured, alone and
 uncontended, the deadline cost real recall: the provider was slower that hour, more blocks
 missed their deliberated attempts, and the cheap fallback answered instead. `blocks` is now
-both cheaper and better measured, which is why it ships. `lean` — the same single call, asked
-about fewer error types — was tried as a further cost cut and refuted: a narrower brief barely
-shortened the model's own reasoning, and it cost real recall to ask for less. The numbers, and
-the Gemini lead, are in `docs/PLAN.md`.
+both cheaper and better measured, which is why it ships.
+
+Two cost candidates were tried past `blocks` and neither is shipped. `lean` — the same single
+call, asked about fewer error types — barely shortened the model's own reasoning and cost real
+recall to ask for less. `swept` runs the free rule pack *before* the call instead of after, so
+the model reads a text with nothing left in it that looks like the four rule-decidable error
+types, rather than being told to ignore them where it sees them; measured once, that was 15%
+cheaper than `blocks` with recall slightly *up*, not down — but it is one draw, this document's
+own bar for a claim is `--repeats 3`, and the DeepSeek key ran out of balance mid-run before a
+second draw could confirm it. A paid Gemini key was also tried, settling a question this file
+used to leave open: `gemini-2.5-flash`, one call, the whole document — F0.5 0.934 at $0.107 per
+10k words, worse *and* over twice `blocks`' cost. The numbers for all of this are in
+`docs/PLAN.md`.
 
 ## Run
 
@@ -174,7 +187,7 @@ docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
 | variable | |
 |---|---|
 | `DEEPSEEK_API_KEY` | required; nothing corrects without it |
-| `EDITOR_AGENT_SYSTEM` | `blocks` (default), `raced`, `fast` or `lean` — see [Modes](#modes) |
+| `EDITOR_AGENT_SYSTEM` | `blocks` (default), `raced`, `fast`, `lean` or `swept` — see [Modes](#modes) |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
 
 `/api/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.

@@ -5,9 +5,18 @@ import time
 import unittest
 
 from corrector.blocks import block_spans
-from corrector.correct import ASPECTS, FOCUS, Corrector, _windows, kinds_block, parse_edits, render
-from corrector.edits import apply_edits, line_spans
-from corrector.llm import Reply
+from corrector.correct import (
+    ASPECTS,
+    FOCUS,
+    Corrector,
+    _remap_to_original,
+    _windows,
+    kinds_block,
+    parse_edits,
+    render,
+)
+from corrector.edits import Edit, apply_edits, line_spans
+from corrector.llm import Reply, price
 from corrector.taxonomy import ERROR_TYPES
 
 TEXT = "El vasu de sidra.\n\n—Dijistes que vendrias —dijo el vasu.\n"
@@ -168,7 +177,10 @@ class CorrectorPass(unittest.TestCase):
         result = self.build(edits_json()).correct(TEXT)
         self.assertEqual(result.usage.calls, 1)
         self.assertEqual(result.usage.reasoning_tokens, 8)
-        self.assertAlmostEqual(result.usage.cost_usd, (100 * 0.14 + 20 * 0.28) / 1e6)
+        # Priced through corrector.llm.price rather than a hardcoded rate:
+        # deepseek-v4-flash's own rate depends on the hour (test_llm.py), and
+        # this test is about the wiring, not the rate table's current values.
+        self.assertAlmostEqual(result.usage.cost_usd, price("deepseek-v4-flash", 100, 20))
 
     def test_a_failed_call_is_an_error_not_an_empty_correction(self):
         result = self.build(RuntimeError("truncado")).correct(TEXT)
@@ -213,6 +225,95 @@ class WholeDocumentAspect(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             corrector.correct(TEXT)
+
+
+class RemapToOriginal(unittest.TestCase):
+    """The pure offset math `precorrect` resolves the model's anchors through."""
+
+    def test_no_rules_is_the_identity(self):
+        self.assertEqual(_remap_to_original(5, 9, []), (5, 9))
+
+    def test_a_shorter_replacement_before_the_span_shifts_it_later(self):
+        # "abc,def" -> "abc def" is not this rule's direction; use the real
+        # one: a rule that *removes* a character shifts everything after it
+        # one place earlier in the cleaned text, so mapping back adds it in.
+        rule = Edit(start=3, end=4, replacement="")  # dropped one character
+        self.assertEqual(_remap_to_original(3, 7, [rule]), (4, 8))
+
+    def test_a_longer_replacement_before_the_span_shifts_it_earlier(self):
+        rule = Edit(start=3, end=4, replacement="XXX")  # 1 char became 3, cleaned [3, 6)
+        self.assertEqual(_remap_to_original(6, 10, [rule]), (4, 8))
+
+    def test_a_rule_after_the_span_does_not_affect_it(self):
+        rule = Edit(start=20, end=21, replacement="")
+        self.assertEqual(_remap_to_original(3, 7, [rule]), (3, 7))
+
+    def test_a_span_inside_a_rules_replacement_is_unmappable(self):
+        rule = Edit(start=3, end=4, replacement="XXXXX")  # occupies cleaned [3, 8)
+        self.assertIsNone(_remap_to_original(4, 6, [rule]))
+
+    def test_touching_a_rule_on_either_side_is_not_an_overlap(self):
+        rule = Edit(start=3, end=4, replacement="XX")  # occupies cleaned [3, 5)
+        self.assertEqual(_remap_to_original(0, 3, [rule]), (0, 3))  # touches from the left
+        self.assertEqual(_remap_to_original(5, 9, [rule]), (4, 8))  # touches from the right
+
+    def test_only_rules_before_the_span_accumulate(self):
+        before = Edit(start=1, end=2, replacement="")  # -1
+        after = Edit(start=20, end=21, replacement="XXXXXXXXXX")  # +9, irrelevant
+        self.assertEqual(_remap_to_original(10, 12, [before, after]), (11, 13))
+
+
+class PrecorrectedWholePass(unittest.TestCase):
+    """`precorrect`: the rule pack runs first, the model reads what is left."""
+
+    TEXT = "Fue el primero , y no el segundo. El vasu era grande.\n"
+
+    def test_the_model_is_shown_the_cleaned_text_not_the_original(self):
+        spy = {}
+        Corrector("deepseek-v4-flash", fake(edits_json(), spy), precorrect=True).correct(self.TEXT)
+        self.assertNotIn("primero , y", spy["user"])
+        self.assertIn("primero, y", spy["user"])
+
+    def test_a_model_edit_lands_at_the_original_texts_own_offset(self):
+        # trim() shrinks "vasu" -> "vaso" to just the "u" -> "o" that
+        # differs, so the span to check is "inside vasu", not "is vasu".
+        item = {"original": "vasu", "replacement": "vaso", "kind": "ortografia_bv"}
+        result = Corrector("deepseek-v4-flash", fake(edits_json(item)), precorrect=True).correct(
+            self.TEXT
+        )
+        vasu_at = self.TEXT.index("vasu")
+        model_edits = [e for e in result.edits if e.kind == "ortografia_bv"]
+        self.assertEqual(len(model_edits), 1)
+        edit = model_edits[0]
+        self.assertTrue(vasu_at <= edit.start < edit.end <= vasu_at + 4)
+        self.assertEqual(self.TEXT[edit.start : edit.end], "u")
+        self.assertEqual(edit.replacement, "o")
+
+    def test_the_final_text_is_correct_whichever_order_the_edits_are_read_in(self):
+        # The ground truth that does not depend on knowing an offset by hand:
+        # applying the reported edits to the ORIGINAL text has to read the
+        # same as applying the model's edit to the CLEANED one.
+        item = {"original": "vasu", "replacement": "vaso", "kind": "ortografia_bv"}
+        result = Corrector("deepseek-v4-flash", fake(edits_json(item)), precorrect=True).correct(
+            self.TEXT
+        )
+        applied, rejected = apply_edits(self.TEXT, result.edits)
+        self.assertEqual(rejected, [])
+        self.assertEqual(applied, "Fue el primero, y no el segundo. El vaso era grande.\n")
+
+    def test_the_rules_own_edit_is_in_the_result(self):
+        result = Corrector("deepseek-v4-flash", fake(edits_json()), precorrect=True).correct(
+            self.TEXT
+        )
+        self.assertTrue(any(e.kind == "espaciado" for e in result.edits))
+
+    def test_mechanical_and_precorrect_do_not_both_fit(self):
+        with self.assertRaises(ValueError):
+            Corrector("deepseek-v4-flash", fake(edits_json()), mechanical=True, precorrect=True)
+
+    def test_precorrect_is_not_wired_into_the_windowed_pass(self):
+        with self.assertRaises(ValueError):
+            Corrector("deepseek-v4-flash", fake(edits_json()), precorrect=True, window_blocks=1)
 
 
 TWO_BLOCKS = "El vasu de sidra.\n—Dijistes que vendrias —dijo el vasu.\n"
@@ -317,7 +418,7 @@ class PerBlockCorrectorPass(unittest.TestCase):
         self.assertEqual(result.usage.calls, 2)
         self.assertEqual(result.usage.input_tokens, 200)
         self.assertEqual(result.usage.output_tokens, 40)
-        self.assertAlmostEqual(result.usage.cost_usd, 2 * (100 * 0.14 + 20 * 0.28) / 1e6)
+        self.assertAlmostEqual(result.usage.cost_usd, 2 * price("deepseek-v4-flash", 100, 20))
 
     def test_usage_still_costs_a_call_that_raises(self):
         result = self.build(sequential([RuntimeError("truncado"), edits_json()])).correct(

@@ -28,6 +28,7 @@ SHAPE = (
     "concurrency",
     "aspects",
     "mechanical",
+    "precorrect",
     "verify",
     "attempts",
     "deadline",
@@ -58,6 +59,9 @@ class PresetsMatchTheScoredRows(unittest.TestCase):
 
     def test_lean_is_corrector_lean(self):
         self.assert_same("lean", "corrector-lean")
+
+    def test_swept_is_corrector_swept(self):
+        self.assert_same("swept", "corrector-swept")
 
 
 class Build(unittest.TestCase):

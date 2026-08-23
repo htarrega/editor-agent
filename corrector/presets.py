@@ -12,24 +12,32 @@ read the product's settings and are free to follow them. What keeps the two
 from drifting apart silently is `tests/test_corrector/test_presets.py`, which
 builds both and compares them argument by argument.
 
-Numbers below are `--repeats 3` on the 8,254-word corpus, per document,
-re-measured 2026-08-24 (the model's own deliberation moved between this run
-and the one `docs/PLAN.md`'s older rows quote — `raced`'s cost held, `blocks`'
-did not — so this table stands on its own rather than mixing days):
+Numbers below are `--repeats 3` on the 8,254-word corpus, `$/10k words`
+computed from each row's own input/output tokens at the rate that actually
+applied when it ran — off-peak `deepseek-v4-flash` (`corrector/llm.py`,
+`_deepseek_v4_flash_rate`) for every row but `fast`'s, which predates that
+fix. All re-measured 2026-08-24 except `fast`; see docs/PLAN.md, "The
+deadline was a bet", for how these numbers were arrived at and what they
+correct in this file's own earlier version.
 
-| preset             | F0.5  | P     | s/doc | $/10k words |
-|--------------------|-------|-------|-------|-------------|
-| `blocks` — shipped | 0.963 | 0.974 | ~74   | 0.061       |
-| `lean`             | 0.929 | 0.942 | ~68   | 0.056       |
-| `fast`             | 0.867 | 0.904 | 2.4   | 0.056¹      |
-| `raced`            | 0.860 | 0.933 | 5.6   | 0.171       |
+| preset             | F0.5  | P     | R     | s/doc | $/10k words | draws |
+|--------------------|-------|-------|-------|-------|-------------|-------|
+| `blocks` — shipped | 0.963 | 0.974 | 0.921 | ~74   | 0.0415      | 2     |
+| `swept`            | 0.952 | 0.955 | 0.941 | ~60   | 0.0354      | **1** |
+| `lean`             | 0.929 | 0.942 | 0.883 | ~68   | 0.0378      | 1     |
+| `raced`            | 0.860 | 0.933 | 0.655 | 5.6   | 0.0824      | 1     |
+| `fast`¹            | 0.867 | 0.904 | 0.745 | 2.4   | 0.056¹      | —     |
 
-¹ `fast` was not re-measured this round; its row is the older one.
+¹ `fast` was not re-measured this round; its row is the pre-2026-08-16 one
+and its `$/10k` is not directly comparable to the others'.
 
-`EDITOR_AGENT_SYSTEM` chooses. It is `blocks`, reversing the earlier call —
-see `corrector/settings.py` for why, and `docs/PLAN.md`, "The deadline was a
-bet", for the numbers. `lean` is registered and not shipped: see its own
-docstring for what it cost to find that out.
+`EDITOR_AGENT_SYSTEM` chooses. It is `blocks` — the row with two consistent
+draws, not `swept`'s cheaper but unconfirmed one: `--repeats 3` on one draw
+is not "nothing," but this document's own rule is that nothing ships off a
+single measurement, and the DeepSeek key ran out of balance
+(`{'error': {'message': 'Insufficient Balance', ...}}`, 2026-08-24) before a
+second `swept` run could settle it. `swept` is registered, cheaper, and
+believed rather than known — see its own docstring.
 """
 
 from corrector import settings
@@ -48,8 +56,9 @@ def hurried(model, system, user):
 
 
 def blocks():
-    """One call for the whole document, and the best F0.5 measured — and,
-    re-measured 2026-08-24, the cheapest of the deliberating rows too.
+    """One call for the whole document, and the best F0.5 measured with more
+    than one draw behind it — and, re-measured 2026-08-24, cheaper than
+    `raced` too, not just better.
 
     ~74 s on 2,000 words, most of it the model deliberating. That used to be
     priced as the cost of the recall, against `raced`'s clock; it no longer
@@ -82,9 +91,9 @@ def raced():
     gap four times the spread that used to say the two were the same. The
     deadline did not move; the provider's pace under it did, so more blocks
     missed their deliberated attempts and fell back to `hurried`, which finds
-    less by design. The cost held almost exactly (0.1706 against the old
-    0.171) — redundancy is what is being paid for here, and it was paid for
-    in full either way. What changed is what the redundancy bought this time.
+    less by design. The redundancy is what makes this row cost roughly twice
+    `blocks` ($0.0824 against $0.0415 per 10k words, both at today's rate) —
+    and this time it bought a worse row, not merely a faster one.
     See docs/PLAN.md, "The deadline was a bet".
     """
     return Corrector(
@@ -115,13 +124,15 @@ def lean():
     the theory that a shorter brief is a shorter deliberation.
 
     Measured `--repeats 3`, 2026-08-24: F0.5 0.929 against `blocks`' 0.963 —
-    real recall lost (0.883 against 0.921), not noise — for $0.056 against
-    $0.061 per 10k words. Six percent cheaper for a quality drop outside the
-    spread is not a trade worth making; the model's reasoning tokens barely
-    moved (9,318 against 9,966), so a narrower brief does not mean a shorter
-    read, it means a less careful one. Consistent with "narrowing the brief"
-    already being a wash on precision (docs/PLAN.md, "buying quality back
-    cheaply") — spent here on cost instead, and lost.
+    real recall lost (0.883 against 0.921), not noise — for $0.0378 against
+    $0.0415 per 10k words. Nine percent cheaper for a quality drop outside
+    the spread is not a trade worth making; the model's reasoning tokens
+    barely moved (9,318 against 9,966 per call), so a narrower brief does not
+    mean a shorter read, it means a less careful one. Consistent with
+    "narrowing the brief" already being a wash on precision (docs/PLAN.md,
+    "buying quality back cheaply") — spent here on cost instead, and lost.
+    Compare `swept`, which cuts the same reasoning by removing spans rather
+    than by removing categories, and actually moves the number.
     """
     return Corrector(
         model=settings.MODEL,
@@ -129,6 +140,39 @@ def lean():
         block_words=settings.BLOCK_WORDS,
         aspects=["juicio"],
         mechanical=True,
+    )
+
+
+def swept():
+    """`blocks`, with the rule pack run first instead of after. Not shipped —
+    one draw, not two; see `PRESETS`' own table for why that matters here.
+
+    `mechanical=True` (`raced`, `fast`) asks the model about everything and
+    lets a rule's edit override a clashing one afterward — the model still
+    reads every mechanically-decidable span and judges it, even though the
+    judgment is thrown away. This runs the rules first, applies them, and
+    sends the model the swept text: nowhere left that looks like an error of
+    the four types the rules own outright.
+
+    Measured `--repeats 3`, 2026-08-24, one draw: F0.5 0.952 against
+    `blocks`' 0.963 (inside the spread) for $0.0354 against $0.0415 per 10k
+    words — 15% cheaper, reasoning tokens down 12% per call (8,742 against
+    9,966), and unlike `lean`, recall did not pay for it (0.941 against
+    0.921 — up, not down). A single small-fragment draw earlier the same day
+    had suggested a much larger cut (reasoning down ~44-62%); at full-corpus
+    scale that shrank to this. The DeepSeek key ran out of balance mid-run on
+    the follow-up measurement, so there is no second draw yet to promote this
+    past "registered, not shipped."
+
+    See `Corrector._correct_whole_precorrected` for the offset-remapping this
+    relies on and docs/PLAN.md, "The deadline was a bet", for the fuller
+    account.
+    """
+    return Corrector(
+        model=settings.MODEL,
+        generate=bounded_deepseek(settings.EFFORT),
+        block_words=settings.BLOCK_WORDS,
+        precorrect=True,
     )
 
 
@@ -164,6 +208,7 @@ PRESETS = {
     "raced": raced,
     "fast": fast,
     "lean": lean,
+    "swept": swept,
 }
 
 

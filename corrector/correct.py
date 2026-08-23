@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel, ValidationError
 
 from corrector.blocks import DEFAULT_BLOCK_WORDS, block_spans
-from corrector.edits import Edit, ProposedEdit, resolve_edits, trim
+from corrector.edits import Edit, ProposedEdit, apply_edits, partition_edits, resolve_edits, trim
 from corrector.llm import Usage, spent
 from corrector.rules import mechanical_edits
 from corrector.taxonomy import ERROR_TYPES
@@ -265,6 +265,7 @@ class Corrector:
         context_blocks=None,
         aspects=None,
         mechanical=False,
+        precorrect=False,
         verify=False,
         attempts=1,
         deadline=None,
@@ -274,6 +275,14 @@ class Corrector:
         # what the frozen reference rows in the harness ask for by name.
         if blocks_per_call and window_blocks:
             raise ValueError("blocks_per_call and window_blocks are two ways to cut the same pass")
+        if mechanical and precorrect:
+            raise ValueError(
+                "mechanical and precorrect are two ways to bring the rule pack in — "
+                "after the call, overriding a clash, or before it, so there is nothing "
+                "left to clash with"
+            )
+        if precorrect and (window_blocks or blocks_per_call):
+            raise ValueError("precorrect is only wired into the whole-document pass")
         self.model = model
         self.prompt = (prompt or PROMPT).format(kinds=kinds_block())
         self.block_words = block_words
@@ -288,6 +297,11 @@ class Corrector:
         # and a pass that silently gained a second source of edits would make
         # those rows say something they were never asked.
         self.mechanical = mechanical
+        # The rule pack pre-applied, so the model never reads what it already
+        # fixed — see `_correct_whole` for what that buys and docs/PLAN.md
+        # for the measurement. An alternative to `mechanical`, not a layer on
+        # top of it: the two cannot both be set (checked above).
+        self.precorrect = precorrect
         # The second wave. Off by default for the same reason as `mechanical`:
         # every row above was measured without it.
         self.verify = verify
@@ -428,6 +442,8 @@ class Corrector:
                 "the whole-document pass is one call; window_blocks splits multiple aspects "
                 "across calls"
             )
+        if self.precorrect:
+            return self._correct_whole_precorrected(text)
         user = render(text, spans)
         if self.aspects:
             user += "\n\n" + ASPECTS[self.aspects[0]]
@@ -450,6 +466,77 @@ class Corrector:
         result.proposed = len(proposals) + malformed
         result.edits, result.rejected = _resolve(text, proposals, malformed, spans)
         result.skipped = sum(result.rejected.values())
+        return result
+
+    def _correct_whole_precorrected(self, text):
+        """`_correct_whole`, with the rule pack run first instead of after.
+
+        `_with_rules` (``mechanical=True``) asks the model about everything
+        and lets a rule's edit override a clashing one; the model still reads
+        every mechanically-decidable span and has to judge it, even though the
+        judgment is thrown away. This runs the rules first, applies them, and
+        sends the model the *result* — a text where a straight quote is
+        already «», where the dash is already an em dash. There is nothing
+        left there to weigh, because there is nothing left there that looks
+        wrong.
+
+        Measured on one fragment, one draw: 11,461 reasoning tokens against
+        the unclean text, 6,376 against the pre-cleaned one — the model was
+        not just asked fewer questions, it thought less doing it. See
+        docs/PLAN.md for the `--repeats 3` numbers this call shape was kept
+        or dropped on.
+
+        The model's anchors resolve against the *cleaned* text — that is what
+        it was shown — and are then translated back to the caller's own
+        offsets by `_remap_to_original`. An edit that lands inside a span a
+        rule already replaced cannot be translated (those characters are not
+        in the original text at all) and is dropped as `clashes_with_rule`;
+        by construction this should not happen, because the model never saw
+        anything to react to there.
+        """
+        result = Correction()
+        raw_rules = mechanical_edits(text)
+        rules, _ = partition_edits(text, raw_rules)
+        cleaned, _ = apply_edits(text, rules)
+        cleaned_spans = block_spans(cleaned, self.block_words)
+
+        user = render(cleaned, cleaned_spans)
+        if self.aspects:
+            user += "\n\n" + ASPECTS[self.aspects[0]]
+
+        started = time.monotonic()
+        try:
+            reply = self._generate(self.model, self.prompt, user)
+        except Exception as exc:
+            result.errors.append(f"{type(exc).__name__}: {exc}")
+            result.usage = Usage(calls=1, seconds=time.monotonic() - started)
+            return result
+
+        result.usage = spent(self.model, reply, time.monotonic() - started)
+        try:
+            proposals, malformed = parse_edits(reply.text)
+        except ValueError as exc:
+            result.errors.append(f"unparseable reply: {exc}")
+            return result
+
+        result.proposed = len(proposals) + malformed + len(rules)
+        edits, rejected = _resolve(cleaned, proposals, malformed, cleaned_spans)
+        rejected = Counter(rejected)
+
+        remapped, clashes = [], 0
+        for edit in edits:
+            span = _remap_to_original(edit.start, edit.end, rules)
+            if span is None:
+                clashes += 1
+                continue
+            start, end = span
+            remapped.append(edit.model_copy(update={"start": start, "end": end}))
+        if clashes:
+            rejected["clashes_with_rule"] += clashes
+
+        result.edits = sorted(remapped + rules, key=lambda edit: (edit.start, edit.end))
+        result.rejected = dict(rejected)
+        result.skipped = sum(rejected.values())
         return result
 
     def _correct_batched(self, text, spans, size):
@@ -841,6 +928,27 @@ def _resolve(text, proposals, malformed, spans=None):
             continue
         kept.append(shrunk)
     return kept, dict(rejected)
+
+
+def _remap_to_original(start, end, rules):
+    """A span in the rule-cleaned text, translated back to the text before
+    ``rules`` ran. ``rules`` must be sorted by start and non-overlapping —
+    exactly what ``partition_edits`` returns, and exactly what building the
+    cleaned text from them means.
+
+    ``None`` if the span falls inside a rule's replacement: those characters
+    are not in the original text at all, so there is no offset to give back.
+    """
+    delta = 0
+    for rule in rules:
+        rule_start = rule.start + delta
+        rule_end = rule_start + len(rule.replacement)
+        if end <= rule_start:
+            break
+        if start < rule_end:
+            return None
+        delta += len(rule.replacement) - (rule.end - rule.start)
+    return start - delta, end - delta
 
 
 def _json_body(raw):

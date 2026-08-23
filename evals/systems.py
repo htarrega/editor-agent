@@ -373,7 +373,7 @@ BUILDERS = {
     # Cost candidate, refuted: `corrector-blocks`'s shape with the brief
     # narrowed to `juicio`, on the theory that less to search for is less to
     # deliberate about. Measured `--repeats 3` 2026-08-24 against `blocks`:
-    # 6% cheaper, real recall lost, reasoning tokens barely moved. Registered
+    # 9% cheaper, real recall lost, reasoning tokens barely moved. Registered
     # so the refutation reproduces — see `corrector/presets.py:lean`.
     "corrector-lean": lambda: CorrectorSystem(
         "corrector-lean",
@@ -383,6 +383,25 @@ BUILDERS = {
             block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
             aspects=_comma_or_none(os.environ.get("EVAL_LEAN_ASPECTS", "juicio")),
             mechanical=True,
+        ),
+    ),
+    # Cost candidate, promising but one draw: `corrector-blocks`'s shape,
+    # rule pack run *before* the call instead of after — the model reads a
+    # text with nowhere left that looks like the four orthotypographic error
+    # types, rather than being asked to ignore them. Unlike `corrector-lean`,
+    # this does not narrow what the model is asked; it narrows what there is
+    # to look at, and unlike `corrector-lean` it worked: `--repeats 3`
+    # 2026-08-24, F0.5 0.952 against `blocks`' 0.963 (inside the spread) at
+    # 15% less cost, recall up rather than down. Not shipped: the DeepSeek key
+    # ran out of balance before a second draw could confirm it — see
+    # `corrector/presets.py:swept`.
+    "corrector-swept": lambda: CorrectorSystem(
+        "corrector-swept",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            precorrect=True,
         ),
     ),
     # The latency row. Three changes from `corrector-blocks`, and each one is
@@ -414,13 +433,15 @@ BUILDERS = {
             mechanical=True,
         ),
     ),
-    # The other end of the frontier: not the fastest row, the best one. One
-    # call for the whole document on a model whose deliberation is cheap in
-    # wall clock — where DeepSeek spends 88 s to score 0.947, this spends ~31 s
-    # to score higher. It is *not* windowed: Gemini loses recall when the
-    # calls are split (0.971 to 0.657 on `sidra`), which is the opposite of
-    # what Sonnet did, and one call is also all the free tier's rate limit
-    # allows. See docs/PLAN.md.
+    # Tried with a paid key 2026-08-24 and refuted as a candidate: F0.5 0.934
+    # against `corrector-blocks`' 0.963, at over double the cost ($0.1066
+    # against $0.0415 per 10k words) — Gemini's per-token rate runs roughly 8x
+    # DeepSeek's on output, and needing fewer reasoning tokens per call was not
+    # enough to close that gap. The free-tier draws this row was registered
+    # for (one fragment, one call, F0.5 0.994) were a single small-sample draw
+    # and did not hold at `--repeats 3` on the full corpus. It is *not*
+    # windowed: Gemini loses recall when the calls are split (0.971 to 0.657
+    # on `sidra`), which is the opposite of what Sonnet did. See docs/PLAN.md.
     "corrector-gemini": lambda: CorrectorSystem(
         "corrector-gemini",
         Corrector(
@@ -430,16 +451,18 @@ BUILDERS = {
             mechanical=True,
         ),
     ),
-    # The row that meets the goal. Everything above trades quality for the
-    # clock; this one buys the clock with redundancy and keeps the
-    # deliberation, which is the only thing that ever bought recall.
+    # Bought the clock with redundancy and kept the deliberation, which is the
+    # only thing that ever bought recall — the row that met the latency goal,
+    # and no longer what ships (`corrector/settings.py`, `corrector-blocks`):
+    # re-measured 2026-08-24, uncontended, its own deadline cost it recall the
+    # day the provider ran slower than the day it was tuned. See docs/PLAN.md,
+    # "The deadline was a bet".
     #
-    # One block per call at `reasoning_effort=minimal` scores F0.5 0.948 on its
-    # own — the default's number — and takes 19 s, all of it the slowest of
-    # sixty-four calls. So each call is issued three times at once and the
-    # first answer wins, under a hard 4.3 s deadline; a fast no-reasoning
-    # ticket goes in first for every block so that nothing can come back empty.
-    # See docs/PLAN.md.
+    # One block per call at `reasoning_effort=minimal` scores well on its own
+    # but takes up to 19 s, all of it the slowest of sixty-four calls. So each
+    # call is issued three times at once and the first answer wins, under a
+    # hard 4.3 s deadline; a fast no-reasoning ticket goes in first for every
+    # block so that nothing can come back empty.
     "corrector-raced": lambda: CorrectorSystem(
         "corrector-raced",
         Corrector(

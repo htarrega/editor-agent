@@ -27,9 +27,13 @@ BLOCK_WORDS = int(
 # `--repeats 3` on 2026-08-24: `raced` alone, uncontended, scored F0.5 0.860 —
 # not 0.919. Its deadline is a bet on the provider being as fast as it was the
 # day it was tuned; that day it was not, and the redundancy that is supposed
-# to buy the bet back at 9x the money did not save it. `blocks` scored 0.963
-# the same day, at roughly a third of `raced`'s cost — cheaper *and* better,
-# which is not a trade at all. See docs/PLAN.md, "The deadline was a bet".
+# to buy the bet back ($0.0824 against `blocks`' $0.0415 per 10k words, both
+# at today's rate) did not save it. `blocks` scored 0.963 the same day, at
+# roughly half `raced`'s cost — cheaper *and* better, which is not a trade at
+# all. Neither figure is the "9x"/"0.019" pair `docs/PLAN.md`'s older rows
+# quote: those used a since-corrected DeepSeek rate and, for `raced`, what
+# looks like a units mismatch never caught before now — see docs/PLAN.md,
+# "The deadline was a bet", for the reconciliation.
 SYSTEM = os.environ.get(
     "EDITOR_AGENT_SYSTEM",
     "blocks",
