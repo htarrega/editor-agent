@@ -5,7 +5,7 @@ import time
 import unittest
 
 from corrector.blocks import block_spans
-from corrector.correct import FOCUS, Corrector, _windows, kinds_block, parse_edits, render
+from corrector.correct import ASPECTS, FOCUS, Corrector, _windows, kinds_block, parse_edits, render
 from corrector.edits import apply_edits, line_spans
 from corrector.llm import Reply
 from corrector.taxonomy import ERROR_TYPES
@@ -190,6 +190,29 @@ class CorrectorPass(unittest.TestCase):
 
     def test_per_block_defaults_to_off(self):
         self.assertIsNone(Corrector("deepseek-v4-flash", fake(edits_json())).blocks_per_call)
+
+
+class WholeDocumentAspect(unittest.TestCase):
+    """`lean`'s trade: the same one call as `blocks`, a narrower brief."""
+
+    def test_one_aspect_is_appended_to_the_only_call(self):
+        spy = {}
+        Corrector("deepseek-v4-flash", fake(edits_json(), spy), aspects=["juicio"]).correct(TEXT)
+        self.assertTrue(spy["user"].endswith(ASPECTS["juicio"]))
+
+    def test_no_aspect_leaves_the_brief_unnarrowed(self):
+        spy = {}
+        Corrector("deepseek-v4-flash", fake(edits_json(), spy)).correct(TEXT)
+        for text in ASPECTS.values():
+            self.assertNotIn(text, spy["user"])
+
+    def test_more_than_one_aspect_has_nowhere_to_go(self):
+        # Two aspects and one call: the second one was never asked for.
+        corrector = Corrector(
+            "deepseek-v4-flash", fake(edits_json()), aspects=["juicio", "ortografía"]
+        )
+        with self.assertRaises(ValueError):
+            corrector.correct(TEXT)
 
 
 TWO_BLOCKS = "El vasu de sidra.\n—Dijistes que vendrias —dijo el vasu.\n"

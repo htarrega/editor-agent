@@ -12,31 +12,57 @@ Two rules govern everything below, and they outrank any instruction to move fast
 ## Where we are
 
 Every system, measured on the same corpus (4 fragments, 8,254 words, `--repeats 3`,
-495 seeded errors) unless the row says otherwise.
+495 seeded errors) unless the row says otherwise. Rows marked ° are 2026-08-17/18;
+`corrector-blocks`, `corrector-raced` and `corrector-lean` were re-measured 2026-08-24
+and are not mixed with the older rows — see "The deadline was a bet" below for why that
+matters.
 
 | system | F0.5 | P | R | FP/1k clean | $/10k words | s/document |
 |---|---|---|---|---|---|---|
-| **`corrector-blocks`** — the reference row | **0.947** | 0.960 | 0.899 | 0.12 | **0.019** | ~88 |
-| `corrector-raced` — what the API ships | 0.919 / 0.903 | 0.936 | 0.857 | 0.36 / 0.12 | 0.171 | **4.35** (worst 4.78) |
-| `corrector-fast` | 0.867 | 0.904 | 0.745 | 0.24 | 0.056 | 2.4 |
-| `rules-only` | 0.789 | 0.970 | 0.453 | 0.12 | **0** | **0.00** |
-| `corrector-gemini` | 0.994¹ | 1.000 | 0.971 | — | — | 31 |
-| `naive-claude` — the baseline² | 0.899 | 0.894 | 0.921 | 2.18 | 1.603 | ~97 |
+| **`corrector-blocks`** — reference row, and what the API ships | **0.963** | 0.974 | 0.921 | 0.24 | 0.061 | ~74 |
+| `corrector-lean` — tried as a cost row, refuted | 0.929 | 0.942 | 0.883 | 0.36 | **0.056** | ~68 |
+| `corrector-raced` — no longer shipped | 0.860 | 0.933 | 0.655 | 0.00 | 0.171 | **5.6** |
+| `corrector-fast`° | 0.867 | 0.904 | 0.745 | 0.24 | 0.056 | 2.4 |
+| `rules-only`° | 0.789 | 0.970 | 0.453 | 0.12 | **0** | **0.00** |
+| `corrector-gemini`° | 0.994¹ | 1.000 | 0.971 | — | — | 31 |
+| `naive-claude`° — the baseline² | 0.899 | 0.894 | 0.921 | 2.18 | 1.603 | ~97 |
 
 ¹ One draw on one fragment. The `--repeats 3` run lost 15 of 16 calls to a free-tier quota.
 ² Measured on a **different corpus** — see the warning in H0.
 
-**The latency question is closed, and the trade has been taken.** A document is corrected in
-under five seconds (`corrector-raced`, worst case 4.78 s over 32 documents) for a quality
-difference of 0.036, which is inside the spread this harness can resolve, at 9× the money.
-That was the author's call to make and it has been made: `EDITOR_AGENT_SYSTEM` defaults to
-`raced` and that is what the API ships.
+**The deadline was a bet, and 2026-08-24 is the day it did not pay.** `raced`'s whole case
+was under-five-seconds without giving up the deliberation, bought with redundancy: three
+deliberated tickets racing a `hurried` no-reasoning floor, first answer wins. That case was
+built on one day's reading of how fast the provider answers. Re-measured `--repeats 3`,
+`raced` alone and uncontended: **F0.5 0.860, not 0.919** — recall down to 0.655 from 0.857,
+a gap four times the harness's own 0.043 spread, so this is not sampling. The deadline itself
+never moved; more of the three deliberated tickets per block simply stopped beating it, so
+more blocks fell back to the cheap `hurried` answer, which finds less by design. The cost of
+this held almost exactly (0.1706 against the old 0.171 per 10k words) — the redundancy was
+paid for in full either time. What changed is only what it bought.
 
-**What the harness measures did not move with it.** `corrector-blocks` is still the row in
-`DEFAULT_SYSTEMS`, still the best F0.5 measured, and still what every cached report quotes.
-Two words that used to name one thing now name two — the reference row and the shipped one —
-and `corrector/presets.py` is where the shipped configurations live, pinned against these
-rows by `tests/test_corrector/test_presets.py` so the pair cannot drift.
+`corrector-blocks` was re-measured the same day, same corpus, no hard deadline to miss:
+F0.5 0.963, cost 0.061 per 10k words. Both numbers moved from the older row — the model's own
+deliberation is not the constant this document has been treating it as — but the comparison
+*between* `blocks` and `raced` on one day holds regardless: `blocks` is both better and
+cheaper, which is not a trade, and `EDITOR_AGENT_SYSTEM` now defaults to it. `raced` stays
+registered, out of `DEFAULT_SYSTEMS`, for whoever still wants the clock and can accept that
+its quality is a bet on the hour rather than a number.
+
+**Tried the same day, on the theory that less to search for is less to deliberate about:**
+`corrector-lean` narrows `blocks`' brief to `juicio` — the types no rule decides — asking
+nothing about the four orthotypographic and three dictionary types the rule pack already
+owns. 6% cheaper than `blocks` (0.056 against 0.061), but real recall lost (0.883 against
+0.921, F0.5 0.929 against 0.963) for reasoning-token counts that barely moved (9,318 against
+9,966). A narrower brief bought a less careful read, not a shorter one. Consistent with
+narrowing already being logged as a wash on precision below — here it was spent on cost and
+lost. Registered as `corrector-lean` / `corrector/presets.py:lean`, not shipped.
+
+**What the harness measures did not move with the reversal.** `corrector-blocks` was already
+the row in `DEFAULT_SYSTEMS` and the best F0.5 measured; it is now also what ships, so the
+two words that used to name two things — the reference row and the shipped one — name one
+again. `corrector/presets.py` is where the shipped configuration lives, pinned against the
+harness's row by `tests/test_corrector/test_presets.py` so the two cannot drift.
 
 ### What to do next
 
@@ -51,6 +77,11 @@ rows by `tests/test_corrector/test_presets.py` so the pair cannot drift.
    overcorrected.
 4. **Then H5's manuscript machinery**: name glossary, global consistency pass, overlap at
    the seams, final report.
+5. **`blocks`' own cost moved 3x between 2026-08-17 and 2026-08-24 on an unchanged corpus and
+   config** (0.019 to 0.061 per 10k words), while `raced`'s held flat. One more re-measurement
+   a few days out would say whether that is the provider's reasoning depth drifting under a
+   fixed model name — plausible, and worth knowing before any cost claim in this document is
+   quoted again — or a one-off. Cheap to check, not yet checked twice.
 
 ### Blocked on the author, not on work
 

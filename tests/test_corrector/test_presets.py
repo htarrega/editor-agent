@@ -56,6 +56,9 @@ class PresetsMatchTheScoredRows(unittest.TestCase):
     def test_fast_is_corrector_fast(self):
         self.assert_same("fast", "corrector-fast")
 
+    def test_lean_is_corrector_lean(self):
+        self.assert_same("lean", "corrector-lean")
+
 
 class Build(unittest.TestCase):
     def test_an_unknown_name_raises_rather_than_defaulting(self):

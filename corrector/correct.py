@@ -416,11 +416,25 @@ class Corrector:
         return result
 
     def _correct_whole(self, text, spans):
-        """Today's shape: every block in one prompt, one call for the document."""
+        """Today's shape: every block in one prompt, one call for the document.
+
+        ``aspects`` narrows what that one call is asked to find, the same brief
+        `_correct_windowed` appends per call — but there is only one call here,
+        so more than one aspect would mean asking for a second thing nobody
+        requested a second call for.
+        """
+        if len(self.aspects) > 1:
+            raise ValueError(
+                "the whole-document pass is one call; window_blocks splits multiple aspects "
+                "across calls"
+            )
+        user = render(text, spans)
+        if self.aspects:
+            user += "\n\n" + ASPECTS[self.aspects[0]]
         result = Correction()
         started = time.monotonic()
         try:
-            reply = self._generate(self.model, self.prompt, render(text, spans))
+            reply = self._generate(self.model, self.prompt, user)
         except Exception as exc:
             result.errors.append(f"{type(exc).__name__}: {exc}")
             result.usage = Usage(calls=1, seconds=time.monotonic() - started)

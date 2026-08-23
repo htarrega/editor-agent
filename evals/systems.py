@@ -370,6 +370,21 @@ BUILDERS = {
             block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
         ),
     ),
+    # Cost candidate, refuted: `corrector-blocks`'s shape with the brief
+    # narrowed to `juicio`, on the theory that less to search for is less to
+    # deliberate about. Measured `--repeats 3` 2026-08-24 against `blocks`:
+    # 6% cheaper, real recall lost, reasoning tokens barely moved. Registered
+    # so the refutation reproduces — see `corrector/presets.py:lean`.
+    "corrector-lean": lambda: CorrectorSystem(
+        "corrector-lean",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_DEEPSEEK_EFFORT", settings.EFFORT)),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            aspects=_comma_or_none(os.environ.get("EVAL_LEAN_ASPECTS", "juicio")),
+            mechanical=True,
+        ),
+    ),
     # The latency row. Three changes from `corrector-blocks`, and each one is
     # the answer to a measurement in docs/PLAN.md rather than a knob turned
     # hopefully:
@@ -482,22 +497,21 @@ BUILDERS = {
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
 #
-# `corrector-raced` is here because it is what the API ships (`EDITOR_AGENT_SYSTEM`,
-# `corrector/presets.py`). `corrector-blocks` stays the reference row — the best
-# F0.5 measured, and what the cached reports quote — so a default run scores both:
-# the row the numbers in docs/PLAN.md are about, and the row a user actually gets.
-# Leaving the shipped one out is how a deployment quietly stops being measured.
-#
-# It is also the row that most needs repeating. `raced` issues each call three
-# times and keeps whichever answers first, so which edits survive is not fixed
-# from run to run — more of its spread is the system than the sampling, and a
-# single draw of it says even less than a single draw of the others.
+# `corrector-blocks` is the one row here now, reference and shipped at once
+# (`EDITOR_AGENT_SYSTEM`, `corrector/presets.py`) — it was only the reference
+# while `corrector-raced` shipped instead. `raced` dropped out of the default
+# set the way `fast` and `verified` already were: still registered, still
+# buildable by name, but not what a plain run scores, because it is not what
+# a plain deployment runs. Its own row is worth repeating on request more than
+# most — it issues each call three times and keeps whichever answers first, so
+# which edits survive is not fixed from run to run, and its quality reading
+# depends on how fast the provider was that hour (docs/PLAN.md, "The deadline
+# was a bet") in a way none of the other rows do.
 DEFAULT_SYSTEMS = [
     "null",
     "languagetool",
     "naive-claude",
     "corrector-blocks",
-    "corrector-raced",
 ]
 
 

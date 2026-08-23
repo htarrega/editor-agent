@@ -23,15 +23,16 @@ BLOCK_WORDS = int(
 
 # Which measured configuration the API runs. One of `corrector/presets.py`.
 #
-# `raced` and not `blocks`, by the author's decision. It is the trade the
-# harness could describe but never make: 0.036 F0.5 against a run-to-run spread
-# of 0.043 — smaller than the instrument — for 88 s down to 4.35, at 9× the
-# money. `blocks` remains what the harness scores by default and what every
-# cached report quotes, so the two names now mean different things: the
-# reference row, and what ships.
+# `blocks` and not `raced`, reversing the earlier call. Re-measured
+# `--repeats 3` on 2026-08-24: `raced` alone, uncontended, scored F0.5 0.860 —
+# not 0.919. Its deadline is a bet on the provider being as fast as it was the
+# day it was tuned; that day it was not, and the redundancy that is supposed
+# to buy the bet back at 9x the money did not save it. `blocks` scored 0.963
+# the same day, at roughly a third of `raced`'s cost — cheaper *and* better,
+# which is not a trade at all. See docs/PLAN.md, "The deadline was a bet".
 SYSTEM = os.environ.get(
     "EDITOR_AGENT_SYSTEM",
-    "raced",
+    "blocks",
 )
 
 # Where the built front lives, when the API is the thing serving it. A missing

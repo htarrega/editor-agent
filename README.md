@@ -37,35 +37,44 @@ false positive.
 
 ## Modes
 
-`EDITOR_AGENT_SYSTEM` picks one of three, and an unknown name is an error rather than a
-fallback to the default.
+`EDITOR_AGENT_SYSTEM` picks one of four, and an unknown name is an error rather than a
+fallback to the default. Numbers below are 2026-08-24; see `docs/PLAN.md`, "The deadline was
+a bet", for why `blocks` and `raced` are not compared against `fast`'s older row.
 
-| `EDITOR_AGENT_SYSTEM` | s/document | worst | F0.5 | P | $/10k words | |
-|---|---|---|---|---|---|---|
-| **`raced`** | **4.35** | 4.78 | 0.919 | 0.936 | 0.171 | **default; what the API ships** |
-| `blocks` | ~88 | ~90 | **0.947** | 0.960 | **0.019** | best measured; what the harness scores by default |
-| `fast` | **2.4** | 3.5 | 0.867 | 0.904 | 0.056 | |
+| `EDITOR_AGENT_SYSTEM` | s/document | F0.5 | P | $/10k words | |
+|---|---|---|---|---|---|
+| **`blocks`** | ~74 | **0.963** | 0.974 | 0.061 | **default; what the API ships; best measured** |
+| `lean` | ~68 | 0.929 | 0.942 | **0.056** | tried as a cost row, refuted — see `docs/PLAN.md` |
+| `raced` | **5.6** | 0.860 | 0.933 | 0.171 | no longer shipped — the deadline is a bet on the hour |
+| `fast`¹ | **2.4** | 0.867 | 0.904 | 0.056 | |
+
+¹ Not re-measured on 2026-08-24; its row is the older one.
 
 Wall clock per 2,000-word document, `--repeats 3` on the 8,254-word corpus. `rules-only` — no
-model at all — sits under all three at 0.789 F0.5, for 0.00 s and nothing.
+model at all — sits under all four at 0.789 F0.5, for 0.00 s and nothing.
 
 ```bash
-uvicorn api.main:app                               # raced, the default
-EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app
+uvicorn api.main:app                               # blocks, the default
+EDITOR_AGENT_SYSTEM=raced uvicorn api.main:app
 EDITOR_AGENT_SYSTEM=fast uvicorn api.main:app
 
 # the rows above, re-measured. One document at a time, or s/document
 # measures queueing rather than the pass.
-python -m evals.run --systems corrector-blocks,corrector-raced,corrector-fast,rules-only \
+python -m evals.run --systems corrector-blocks,corrector-lean,corrector-raced,corrector-fast,rules-only \
        --repeats 3 --concurrency 1
 ```
 
-`blocks` is one call for the whole document, and ~87% of its 88 seconds is the model
+`blocks` is one call for the whole document, and most of its ~74 seconds is the model
 deliberating. `raced` keeps the deliberation and drops the tail: every call goes out **three
 times at once and the first answer wins**, under a hard 4.3 s deadline, with a no-reasoning
-ticket queued first so no block comes back empty. It costs 0.036 F0.5 — less than the
-harness's own run-to-run spread of 0.043 — and 9× the money. Why the author took that trade,
-and the Gemini lead, are in `docs/PLAN.md`.
+ticket queued first so no block comes back empty. That bought a quality difference inside the
+harness's own run-to-run spread — on the day it was measured. Re-measured, alone and
+uncontended, the deadline cost real recall: the provider was slower that hour, more blocks
+missed their deliberated attempts, and the cheap fallback answered instead. `blocks` is now
+both cheaper and better measured, which is why it ships. `lean` — the same single call, asked
+about fewer error types — was tried as a further cost cut and refuted: a narrower brief barely
+shortened the model's own reasoning, and it cost real recall to ask for less. The numbers, and
+the Gemini lead, are in `docs/PLAN.md`.
 
 ## Run
 
@@ -95,8 +104,8 @@ before believing a comparison. Every flag is in [`evals/README.md`](evals/README
 
 A FastAPI wrapper over the pipeline, at `/api`. It needs `DEEPSEEK_API_KEY`, and no endpoint
 takes a path: the content travels in the body. Work is submitted and polled rather than
-awaited — `raced` answers in about four seconds and `blocks` takes 60–90 s, and one contract
-covers both, so changing the mode never changes how a client talks to it.
+awaited — `blocks` takes 60–90 s and `raced` answers in about five, and one contract covers
+both, so changing the mode never changes how a client talks to it.
 
 ```bash
 uvicorn api.main:app
@@ -165,7 +174,7 @@ docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
 | variable | |
 |---|---|
 | `DEEPSEEK_API_KEY` | required; nothing corrects without it |
-| `EDITOR_AGENT_SYSTEM` | `raced` (default), `blocks` or `fast` — see [Modes](#modes) |
+| `EDITOR_AGENT_SYSTEM` | `blocks` (default), `raced`, `fast` or `lean` — see [Modes](#modes) |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
 
 `/api/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.
