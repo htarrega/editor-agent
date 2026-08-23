@@ -23,6 +23,12 @@ dependencies = [
     "pydantic==2.13.4",
     "fastapi==0.116.1",
     "uvicorn[standard]==0.35.0",
+    # The templates the web router renders (`api/web.py`, `templates/`).
+    "jinja2==3.1.6",
+    # `Form(...)` fields need it to parse `multipart/form-data`; FastAPI only
+    # raises at request time if it is missing, so it belongs here rather than
+    # being left to whoever notices the front is broken.
+    "python-multipart==0.0.32",
     # The Spanish word list `corrector/rules.py` decides a misspelling against.
     # Pinned like the rest: which words the dictionary holds is part of what a
     # measured row means, and it is the difference between «palabra inexistente»

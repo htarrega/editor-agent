@@ -1,0 +1,53 @@
+{% from "components/banner.html" import banner %}
+<section class="compose" aria-labelledby="compose-heading">
+  <div class="intro">
+    <h1 id="compose-heading" tabindex="-1">Amanuense</h1>
+    <p class="lede">
+      Pega el manuscrito o sube el archivo. Te lo devolvemos limpio: sin marcas,
+      sin anotaciones, listo para seguir escribiendo.
+    </p>
+  </div>
+
+  {% if error %}{{ banner(error) }}{% endif %}
+
+  <form
+    id="compose-form"
+    hx-post="/jobs"
+    hx-target="#stage"
+    hx-swap="innerHTML"
+    hx-disabled-elt="#submit-button"
+  >
+    <div class="field">
+      <label for="manuscript-text">Manuscrito</label>
+      <textarea
+        id="manuscript-text"
+        name="text"
+        rows="16"
+        placeholder="Aquí, el texto…"
+      >{{- text or "" -}}</textarea>
+    </div>
+
+    <div class="field field-upload">
+      <label for="file-input">O sube un archivo (.txt, .md)</label>
+      <input type="file" id="file-input" accept=".txt,.md,.markdown,.text" />
+      <p id="file-name" class="hint" hidden></p>
+    </div>
+
+    <input type="hidden" name="filename" id="filename-field" value="{{ filename or '' }}" />
+
+    <div class="actions">
+      <p id="text-summary" class="summary" aria-live="polite"></p>
+      <div class="buttons">
+        <button type="button" id="clear-button" class="btn btn-ghost">Vaciar</button>
+        <button
+          type="submit"
+          id="submit-button"
+          class="btn btn-primary"
+          {% if not (text and text.strip()) %}disabled{% endif %}
+        >Corregir</button>
+      </div>
+    </div>
+
+    <p class="hint shortcut-hint">Ctrl+Intro (Cmd+Intro en Mac) también envía el manuscrito.</p>
+  </form>
+</section>

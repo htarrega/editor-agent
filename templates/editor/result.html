@@ -1,0 +1,41 @@
+{% from "components/back_link.html" import back_link %}
+<section id="job-result" class="result" aria-labelledby="result-heading">
+  <div class="result-header">
+    <div>
+      <h1 id="result-heading" tabindex="-1">El texto, corregido</h1>
+      <p class="summary">
+        {{ words }} palabra{{ "s" if words != 1 else "" }} ·
+        {{ paragraphs|length }} párrafo{{ "s" if paragraphs|length != 1 else "" }}
+      </p>
+    </div>
+    <div class="buttons">
+      <button
+        type="button"
+        id="copy-button"
+        class="btn btn-ghost"
+        data-source="corrected-text-raw"
+      >Copiar</button>
+      <button
+        type="button"
+        id="download-button"
+        class="btn btn-primary"
+        data-source="corrected-text-raw"
+        data-filename="{{ download_name }}"
+      >Descargar</button>
+    </div>
+  </div>
+
+  {# The exact corrected text, for the copy/download buttons to read from —
+     a `<textarea>` round-trips through HTML entities cleanly and gives
+     `static/app.js` back the byte-for-byte string, unlike scraping the
+     rendered paragraphs below. #}
+  <textarea id="corrected-text-raw" class="raw-text" readonly hidden>{{- job.text or "" -}}</textarea>
+
+  <article class="manuscript">
+    {% for paragraph in paragraphs %}
+    <p>{{ paragraph }}</p>
+    {% endfor %}
+  </article>
+
+  <p class="actions">{{ back_link() }}</p>
+</section>

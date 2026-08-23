@@ -1,0 +1,16 @@
+{# Polling stops itself: this is the only fragment carrying `hx-trigger`, so
+   once `GET /jobs/{id}` answers with `editor/result.html` or
+   `editor/error.html` instead — neither of which repeats it — there is
+   nothing left telling the browser to ask again. #}
+<section
+  id="job-status"
+  class="job-status"
+  hx-get="/jobs/{{ job.job_id }}{% if filename %}?filename={{ filename | urlencode }}{% endif %}"
+  hx-trigger="every 2s"
+  hx-swap="outerHTML"
+  aria-live="polite"
+>
+  <p class="spinner" aria-hidden="true"></p>
+  <p>Corrigiendo manuscrito…</p>
+  <p class="hint">{{ job.words }} palabra{{ "s" if job.words != 1 else "" }} en cola.</p>
+</section>

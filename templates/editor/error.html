@@ -1,0 +1,7 @@
+{% from "components/banner.html" import banner %}
+{% from "components/back_link.html" import back_link %}
+<section id="job-error" class="result" aria-labelledby="error-heading">
+  <h1 id="error-heading" tabindex="-1">No se ha podido corregir</h1>
+  {{ banner(detail) }}
+  <p class="actions">{{ back_link() }}</p>
+</section>

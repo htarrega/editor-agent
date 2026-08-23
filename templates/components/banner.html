@@ -1,0 +1,7 @@
+{# A visible, announced status message. `kind` picks the colour; the `role`
+   is what makes a screen reader speak it as soon as it appears, which matters
+   most right here — this is how both a rejected submission and a failed job
+   are surfaced, and neither is optional to notice. #}
+{% macro banner(message, kind="error") %}
+<p class="banner banner-{{ kind }}" role="alert">{{ message }}</p>
+{% endmacro %}

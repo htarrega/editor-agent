@@ -1,0 +1,7 @@
+{# The one way back to the compose screen, from either a finished result or a
+   failed job. A plain link rather than an hx-get: it is a full navigation
+   back to `/`, not a fragment swap, so there is nothing left to reset by hand
+   — a fresh `GET /` already renders an empty form. #}
+{% macro back_link(label="← Volver al manuscrito") %}
+<a href="/" class="btn btn-ghost">{{ label }}</a>
+{% endmacro %}

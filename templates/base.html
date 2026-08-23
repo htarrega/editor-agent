@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Amanuense — corrector de textos literarios{% endblock %}</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/htmx.min.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#stage">Ir al contenido</a>
+
+    <header class="site-header">
+      <a class="brand" href="/">Amanuense</a>
+      <p class="tagline">Corrector de textos literarios</p>
+    </header>
+
+    <main id="stage" class="stage">
+      {% block stage %}{% endblock %}
+    </main>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
