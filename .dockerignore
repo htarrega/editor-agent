@@ -1,0 +1,22 @@
+# The corpus is the author's own prose and is deliberately outside the image,
+# the same way it is outside the repository (docs/PLAN.md, H0).
+evals/corpus/
+evals/results/
+
+.git/
+.github/
+.env
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+
+# Built inside the image, from the lockfile.
+node_modules/
+web/node_modules/
+web/dist/
+
+# Not part of what runs.
+tests/
+docs/

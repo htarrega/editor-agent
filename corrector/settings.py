@@ -34,6 +34,15 @@ SYSTEM = os.environ.get(
     "raced",
 )
 
+# Where the built front lives, when the API is the thing serving it. A missing
+# directory means there is nothing to serve and the API is HTTP only, which is
+# every development checkout: `web/dist` is a build artefact and git ignores it.
+# The container image builds the front and points this at it.
+WEB_DIST = os.environ.get(
+    "EDITOR_AGENT_WEB_DIST",
+    "web/dist",
+)
+
 # The largest text the API will accept. Only `api/` reads it — it lives here
 # because this is the one place in the repository that reads the environment,
 # and a second config module for a single value is worse than the dilution.

@@ -10,8 +10,10 @@ a provider. Keep it on `127.0.0.1` until that is settled.
 
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api.jobs import Job, JobStore
@@ -25,6 +27,16 @@ app = FastAPI(
 )
 
 STORE = JobStore()
+
+# The endpoints live on a router rather than on the app because the app serves
+# them at two prefixes at once. The front always calls `/api` on its own
+# origin: in development Vite proxies that to `127.0.0.1:8000` and strips the
+# prefix, so the call lands here as `/jobs`; in production this same process
+# serves the build, and the browser's `/api/jobs` arrives with the prefix
+# intact. Answering both is what lets the front hold one URL for both
+# situations, instead of a build-time switch that can only be wrong in one of
+# them.
+ROUTER = APIRouter()
 
 # One pass is mostly the model deliberating, so a worker spends its time
 # waiting rather than computing and threads are the right shape for it. The
@@ -61,12 +73,12 @@ class JobCreated(BaseModel):
     words: int
 
 
-@app.get("/health")
+@ROUTER.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@app.post("/jobs", status_code=202, response_model=JobCreated)
+@ROUTER.post("/jobs", status_code=202, response_model=JobCreated)
 def submit(request: JobRequest, corrector: Corrector = Depends(get_corrector)):
     # `detail` on these two is shown to the author in the browser verbatim, so
     # it is written in the language the product is in. The provider's messages
@@ -93,7 +105,7 @@ def submit(request: JobRequest, corrector: Corrector = Depends(get_corrector)):
     return job
 
 
-@app.get("/jobs/{job_id}", response_model=Job)
+@ROUTER.get("/jobs/{job_id}", response_model=Job)
 def read(job_id: str):
     job = STORE.get(job_id)
 
@@ -104,6 +116,36 @@ def read(job_id: str):
         )
 
     return job
+
+
+def mount_web(app, directory=settings.WEB_DIST):
+    """Serve the built front off this app, if there is a build to serve.
+
+    Mounted at `/` and last, so it can never shadow an endpoint — Starlette
+    matches in registration order and the router is already in. `html=True` is
+    what answers `/` with `index.html`.
+
+    A missing directory is the normal case, not an error: a development
+    checkout has no `web/dist`, and StaticFiles refuses to point at a directory
+    that is not there. Returns whether anything was mounted.
+    """
+    path = Path(directory)
+
+    if not path.is_dir():
+        return False
+
+    app.mount("/", StaticFiles(directory=path, html=True), name="web")
+    return True
+
+
+app.include_router(ROUTER)
+
+# The same endpoints again, where the browser looks for them in production.
+# Out of the schema so `/openapi.json` describes one surface rather than each
+# route twice under two names.
+app.include_router(ROUTER, prefix="/api", include_in_schema=False)
+
+mount_web(app)
 
 
 def run(job_id, text, corrector):

@@ -17,58 +17,56 @@ source venv/bin/activate
 pip install -e ".[dev]"          # drop [dev] for the pipeline without ruff
 ```
 
-Two provider keys. The cheap model does the correcting; the strong one is the baseline it
-is measured against, and is only called when a run asks for that row.
+The cheap model does the correcting. The strong one is the baseline it is measured against,
+and is called only when a run asks for that row.
 
 ```bash
-export DEEPSEEK_API_KEY=...      # the corrector's workhorse
-export ANTHROPIC_API_KEY=...     # strong-model baseline, only for the rows that ask for it
+export DEEPSEEK_API_KEY=...      # the corrector's workhorse; the only one the product needs
+export ANTHROPIC_API_KEY=...     # strong-model baseline, for the harness rows that ask
 export GOOGLE_API_KEY=...        # optional, for `corrector-gemini`
 ```
 
-`corrector/settings.py` holds the three knobs the pipeline reads — `EDITOR_AGENT_MODEL`,
-`EDITOR_AGENT_EFFORT`, `EDITOR_AGENT_BLOCK_WORDS`. The harness's `EVAL_*` variables still
-win where they are set, and fall back to these, so both sides cannot drift onto different
-configurations without anyone noticing.
+`corrector/settings.py` holds every knob the pipeline reads. The harness's `EVAL_*`
+variables win where they are set and fall back to these, so the two sides cannot drift onto
+different configurations without anyone noticing.
 
-**A fresh clone cannot run the harness yet.** The corpus is deliberately not in the
-repository — it is the author's own prose, and the reports quote it back (`docs/PLAN.md`,
-H0). Drop one or more clean `.txt` files into `evals/corpus/` first; without them
-`evals.run` stops with `FileNotFoundError: no .txt fragments in evals/corpus`. A fragment
-must go in free of typos of its own: on the untouched corpus every edit counts as a false
-positive, so a pre-existing typo contaminates the headline metric.
+**A fresh clone cannot run the harness yet.** The corpus is deliberately outside the
+repository — it is the author's own prose and the reports quote it back (`docs/PLAN.md`,
+H0). Drop clean `.txt` files into `evals/corpus/` first, or `evals.run` stops with
+`FileNotFoundError`. A fragment must arrive free of typos of its own: on the untouched
+corpus every edit counts as a false positive.
 
 ## Speed
 
 **The API ships `corrector-raced`**, which corrects a document in under five seconds.
 `corrector-blocks` — one call for the whole document, ~88 s on 2,000 words, ~87% of it the
 model deliberating — is still the best row measured and still what the harness scores by
-default, so the two words now mean different things below: the *reference* row is `blocks`,
-the *shipped* one is `raced`. `EDITOR_AGENT_SYSTEM` switches between them.
+default. So the two words mean different things below: the *reference* row is `blocks`, the
+*shipped* one is `raced`. `EDITOR_AGENT_SYSTEM` switches between them.
+
+| | F0.5 | P | FP/1k clean | s/document | worst | $/10k words |
+|---|---|---|---|---|---|---|
+| `corrector-blocks` (reference) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
+| **`corrector-raced`** (shipped) | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
+| `corrector-fast` | 0.867 | 0.904 | 0.24 | 2.4 | 3.5 | 0.056 |
+| `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** | 0.01 | **0.000** |
 
 ```bash
 python -m evals.run --systems corrector-blocks,corrector-raced,rules-only \
        --repeats 3 --concurrency 1     # one document at a time, or s/doc measures queueing
 ```
 
-| | F0.5 | P | FP/1k clean | s/document | worst | $/10k words |
-|---|---|---|---|---|---|---|
-| `corrector-blocks` (the reference row) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
-| **`corrector-raced`** (shipped) | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
-| `corrector-fast` | 0.867 | 0.904 | 0.24 | 2.4 | 3.5 | 0.056 |
-| `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** | 0.01 | **0.000** |
-
-`corrector-raced` gets there without giving up the deliberation that recall is made of. One
-block per call already scores 0.948 on its own but takes 19 s, and all 19 are the tail — the
-median call is 4.3 s. So each call is issued **three times at once and the first answer
-wins**, under a hard 4.3 s deadline, with a fast no-reasoning ticket queued first for every
-block so nothing comes back empty. All 32 measured documents finished under five seconds.
+`raced` gets there without giving up the deliberation that recall is made of. One block per
+call already scores 0.948 on its own but takes 19 s, and all 19 are the tail — the median
+call is 4.3 s. So each call is issued **three times at once and the first answer wins**,
+under a hard 4.3 s deadline, with a fast no-reasoning ticket queued first for every block so
+nothing comes back empty. All 32 measured documents finished under five seconds.
 
 The quality difference is 0.036 against a run-to-run spread of 0.043 — smaller than this
 harness can resolve — and it costs 9× the money. That trade was never the harness's to make;
-**the author took it**, and `raced` is what the API runs. What the harness measures did not
-move with it: `corrector-blocks` is still what `python -m evals.run` scores by default and
-what every cached report quotes, or the rows would stop meaning what they say.
+**the author took it**. What the harness measures did not move with it: `blocks` is still
+what `python -m evals.run` scores by default and what every cached report quotes, or the
+rows would stop meaning what they say.
 
 ```bash
 EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app    # back to the reference row
@@ -85,7 +83,7 @@ wrong. Details and the Gemini lead are in `docs/PLAN.md`.
 Nothing below needs a key or the corpus:
 
 ```bash
-python -m unittest discover -s tests -t .    # 217 tests, offline
+python -m unittest discover -s tests -t .    # 242 tests, offline
 ruff format . && ruff check .                # formatting and import order
 ```
 
@@ -107,9 +105,9 @@ measurement — use `--repeats 3` before believing a comparison. The flags are d
 
 ## API
 
-A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY`; it never touches the
-filesystem. Work is submitted and polled rather than awaited — a pass runs 60–90 s on a
-2k-word fragment and that is not a wait a single request can hide.
+A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY` and never touches the
+filesystem. Work is submitted and polled rather than awaited — a `blocks` pass runs 60–90 s
+on a 2k-word fragment, and that is not a wait a single request can hide.
 
 ```bash
 uvicorn api.main:app
@@ -123,28 +121,27 @@ curl localhost:8000/jobs/<job_id>
 # {"status": "completed", "text": "El niño comió una manzana, y luego se fue a casa.", ...}
 ```
 
+Every endpoint answers at `/api/...` as well, because that is where the browser looks once
+the same process serves the front — see [Deploy](#deploy).
+
 The finished body carries the corrected text and what was proposed, applied and rejected. A
-job whose every call failed ends `failed` with the reason in `detail`, instead of completing
-with the original text in a way that is indistinguishable from "no errors found"; a job that
-lost only some of its calls completes with what the rest produced, failures in `errors`.
+job whose every call failed ends `failed` with the reason in `detail`, rather than
+completing with the original text in a way indistinguishable from "no errors found"; a job
+that lost only some of its calls completes with what the rest produced, failures in
+`errors`.
 
 Texts over `EDITOR_AGENT_MAX_WORDS` (2,000) are refused at submit with a `413`. That is a
-measured ceiling rather than a policy — there is no document-level pass yet (`docs/PLAN.md`,
-H5), so above it the pipeline runs where nobody has scored it.
-
-Jobs live in the process's memory: one container, and a restart loses what was in flight.
-
-**Nothing authenticates or rate-limits `POST /jobs`, and every call spends money at a
-provider.** Keep it on `127.0.0.1` until that is settled.
+measured ceiling, not a policy: there is no document-level pass yet (`docs/PLAN.md`, H5), so
+above it the pipeline runs where nobody has scored it.
 
 `GET /health` answers without touching a provider or building a corrector, so it is safe to
-poll. `POST /correct-file` is gone: it read any path the process could read, and
+poll. `POST /correct-file` is gone — it read any path the process could read, and
 `tests/test_api/test_main.py` pins its absence.
 
 ## Front
 
-A browser front over the API — paste or upload a manuscript, get it back corrected. It is
-its own npm project and needs the API running beside it:
+A browser front over the API — paste or upload a manuscript, get it back corrected. Its own
+npm project, and it needs the API running beside it:
 
 ```bash
 uvicorn api.main:app                     # one terminal
@@ -152,9 +149,50 @@ cd web && npm install && npm run dev     # the other, http://localhost:5173
 ```
 
 The front always calls `/api` on its own origin: Vite proxies it to `127.0.0.1:8000` in
-development, and in production the container that serves the API serves the build. No CORS
-in either, and the two situations cannot drift apart. Details in
+development and strips the prefix, and in production the API process serves the build and
+answers the prefix itself. No CORS in either, and the two cannot drift apart. Details in
 [`web/README.md`](web/README.md).
+
+## Deploy
+
+One image. The front is built inside it and the API process serves the build, so the browser
+talks to a single origin — the shape the Vite proxy imitates in development.
+
+```bash
+docker build -t editor-agent .
+docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
+```
+
+`http://localhost:8000` is the front; the API is under `/api` and at the root. Nothing else
+is required: `ANTHROPIC_API_KEY` is the harness's, not the product's, and the corpus is
+never in the image.
+
+| variable | |
+|---|---|
+| `DEEPSEEK_API_KEY` | required — nothing corrects without it |
+| `EDITOR_AGENT_SYSTEM` | `raced` (default), `blocks` or `fast`; only measured rows |
+| `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
+| `EDITOR_AGENT_WEB_DIST` | where the build is; the image already points it at `/app/web/dist` |
+
+The image declares `/health` as its `HEALTHCHECK`, and it is the right readiness probe
+anywhere else: it answers without building a corrector or reaching the provider.
+
+Two things to settle before it faces anyone but you:
+
+- **Nothing authenticates or rate-limits `POST /jobs`, and every submission spends money at
+  a provider.** Publish it on `127.0.0.1` as above, or put something that authenticates in
+  front of it.
+- **Jobs live in the process's memory, and the newest 256 are kept.** One container: a
+  restart loses what is in flight, and a second replica behind a round-robin answers `404`
+  to half the polls. Scaling out means moving the store out of the process first.
+
+Without a container it is the same three pieces by hand:
+
+```bash
+pip install .
+cd web && npm ci && npm run build && cd ..
+EDITOR_AGENT_WEB_DIST=web/dist uvicorn api.main:app --host 0.0.0.0
+```
 
 ## Layout
 
@@ -162,19 +200,19 @@ in either, and the two situations cannot drift apart. Details in
 |---|---|
 | `corrector/` | the pipeline — the product. Imports nothing from `evals/` |
 | `evals/` | the harness that measures it |
-| `api/` | the HTTP wrapper over the pipeline |
+| `api/` | the HTTP wrapper over the pipeline, and what serves the built front |
 | `web/` | the browser front, over the HTTP wrapper — [`web/README.md`](web/README.md) |
 | `tests/` | `tests/test_corrector/`, `tests/test_evals/` and `tests/test_api/`, mirroring the three |
 
-`web/` is the only part not installed by `pip install -e .`: it is a npm project of its own
-(`cd web && npm install`), ignored by the Python packaging entirely. It talks to `api/`
-across HTTP and shares no code with it, so the two can be built, tested and deployed apart —
-what they do share is the endpoint contract, written down in both READMEs.
+`web/` is the only part `pip install -e .` does not install: it is an npm project of its own
+and the Python packaging ignores it entirely. It talks to `api/` across HTTP and shares no
+code with it, so the two can be built and tested apart — what they share is the endpoint
+contract, written down in both READMEs, and one container at deploy time.
 
 Installing the project is what makes `corrector` importable from outside the repository
-root. The test directories carry a `test_` prefix so that neither can ever shadow the
-package it tests: a directory named `corrector/` under `tests/` is a second, empty
-`corrector` on the import path the moment a runner puts `tests/` on it.
+root. The test directories carry a `test_` prefix so neither can shadow the package it
+tests: a directory named `corrector/` under `tests/` is a second, empty `corrector` on the
+import path the moment a runner puts `tests/` on it.
 
 The tests run offline — the corpus lives outside the repository (`docs/PLAN.md`, H0), and
 the one test that wants it skips when it is absent.

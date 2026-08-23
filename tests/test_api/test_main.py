@@ -8,16 +8,19 @@ written the job, and what is exercised is the path production takes.
 """
 
 import json
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api import main
 from api.jobs import Job, JobStore
-from api.main import app, get_corrector
+from api.main import ROUTER, app, get_corrector, mount_web
 from corrector import presets, settings
 from corrector.correct import Corrector
 from corrector.llm import Reply
@@ -351,6 +354,89 @@ class Store(unittest.TestCase):
             "detail",
         }
         self.assertLessEqual(expected, set(Job.model_fields))
+
+
+class Prefix(JobClient):
+    """The same endpoints under `/api`, which is where the browser looks.
+
+    The front calls `/api` on its own origin in both situations: in development
+    Vite strips the prefix before the call arrives, in production it does not,
+    because the same process serves the build. If only one of the two prefixes
+    answered, the front would work in exactly one of them.
+    """
+
+    def test_health_answers_under_the_prefix(self):
+        self.assertEqual(self.client.get("/api/health").json(), {"status": "ok"})
+
+    def test_a_job_can_be_submitted_and_polled_under_the_prefix(self):
+        self.use(fake_corrector(edits_json({"original": "comio", "replacement": "comió"})))
+
+        response = self.client.post("/api/jobs", json={"text": "El niño comio."})
+        self.assertEqual(response.status_code, 202)
+        job_id = response.json()["job_id"]
+
+        deadline = time.monotonic() + FINISH_TIMEOUT
+        while time.monotonic() < deadline:
+            body = self.client.get(f"/api/jobs/{job_id}").json()
+            if body["status"] != "running":
+                break
+            time.sleep(0.01)
+        else:
+            self.fail(f"job {job_id} never finished")
+
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["text"], "El niño comió.")
+
+    def test_the_refusals_are_the_same_under_both(self):
+        self.assertEqual(self.client.post("/api/jobs", json={"text": "  "}).status_code, 400)
+        self.assertEqual(self.client.get("/api/jobs/no-such-job").status_code, 404)
+
+
+class Web(unittest.TestCase):
+    """Serving the built front off the API process.
+
+    One origin, so neither side needs CORS and development and production
+    cannot drift onto different assumptions about where the API is.
+    """
+
+    def tmpdir(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name)
+
+    def build(self, index="<!doctype html><title>Amanuense</title>"):
+        directory = self.tmpdir()
+        (directory / "index.html").write_text(index)
+        return directory
+
+    def served(self, directory):
+        app = FastAPI()
+        app.include_router(ROUTER)
+        app.include_router(ROUTER, prefix="/api", include_in_schema=False)
+        mount_web(app, directory)
+        return TestClient(app)
+
+    def test_the_root_answers_with_the_build(self):
+        client = self.served(self.build())
+        response = client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Amanuense", response.text)
+
+    def test_a_checkout_without_a_build_mounts_nothing(self):
+        # `web/dist` is a build artefact and git ignores it, so the normal
+        # development case is that there is nothing to serve. StaticFiles
+        # raises on a missing directory, which would take the API down with it.
+        missing = self.tmpdir() / "dist"
+        self.assertFalse(mount_web(FastAPI(), missing))
+
+    def test_the_build_never_shadows_an_endpoint(self):
+        # Mounted at `/`, so the order it goes in decides whether `POST /jobs`
+        # reaches the pipeline or the static files.
+        directory = self.build()
+        (directory / "health").write_text("not the endpoint")
+
+        client = self.served(directory)
+        self.assertEqual(client.get("/health").json(), {"status": "ok"})
 
 
 if __name__ == "__main__":
