@@ -137,6 +137,28 @@ class Poll(WebClient):
         self.assertIn("el gato duerme.", body)
         self.assertNotIn("hx-trigger", body)
 
+    def test_a_completed_job_lists_its_changes_apart_from_the_text(self):
+        # The point: what was corrected is visible on its own, not just folded
+        # into the corrected text the author has to diff against the original
+        # by eye.
+        item = {"line": 1, "original": "el gatto", "replacement": "el gato"}
+        self.use(fake_corrector(edits_json(item)))
+
+        body = self.finish("el gatto duerme.")
+
+        self.assertIn('class="changes-list"', body)
+        # Widened to the whole word for legibility — see `api/service.py:_change`.
+        self.assertIn('<span class="change-before">gatto</span>', body)
+        self.assertIn('<span class="change-after">gato</span>', body)
+
+    def test_a_clean_text_shows_no_changes_to_list(self):
+        self.use(fake_corrector(edits_json()))
+
+        body = self.finish("El gato duerme.")
+
+        self.assertNotIn('class="changes-list"', body)
+        self.assertIn("Sin cambios: el texto ya estaba limpio.", body)
+
     def test_a_failed_job_shows_the_detail(self):
         # Without this, an invalid API key would have nowhere to surface: the
         # fragment either shows the corrected text or explains why there is

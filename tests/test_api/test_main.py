@@ -157,6 +157,20 @@ class Poll(JobClient):
         self.assertEqual(body["rejected"], {})
         self.assertEqual(body["errors"], [])
         self.assertIsNone(body["detail"])
+        # `correct._resolve` trims the edit to its minimal changing span before
+        # it ever reaches here — one letter, not the whole word — so `changes`
+        # widens it back out to the word boundary; see `api/service.py:_change`.
+        self.assertEqual(
+            body["changes"],
+            [{"original": "gatto", "replacement": "gato", "kind": "otro", "rule": ""}],
+        )
+
+    def test_a_clean_text_completes_with_no_changes(self):
+        self.use(fake_corrector(edits_json()))
+        body = self.finish("El gato duerme.")
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["applied"], 0)
+        self.assertEqual(body["changes"], [])
 
     def test_skipped_matches_rejected_including_apply_stage(self):
         # Two anchors that each resolve cleanly on their own but overlap once
@@ -356,6 +370,7 @@ class Store(unittest.TestCase):
             "applied",
             "proposed",
             "skipped",
+            "changes",
             "errors",
             "detail",
         }

@@ -37,5 +37,24 @@
     {% endfor %}
   </article>
 
+  <section class="changes" aria-labelledby="changes-heading">
+    {% if job.changes %}
+    <h2 id="changes-heading">Cambios aplicados ({{ job.changes|length }})</h2>
+    <ul class="changes-list">
+      {% for change in job.changes %}
+      <li class="change">
+        <span class="change-before">{{ change.original }}</span>
+        <span class="change-arrow" aria-hidden="true">→</span>
+        <span class="change-after">{{ change.replacement }}</span>
+        {% if change.rule %}<span class="change-rule">{{ change.rule }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <h2 id="changes-heading">Cambios aplicados</h2>
+    <p class="hint">Sin cambios: el texto ya estaba limpio.</p>
+    {% endif %}
+  </section>
+
   <p class="actions">{{ back_link() }}</p>
 </section>

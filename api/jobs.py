@@ -27,6 +27,21 @@ CAPACITY = 256
 Status = Literal["running", "completed", "failed"]
 
 
+class AppliedChange(BaseModel):
+    """One correction that made it into the final text — apart from the text itself.
+
+    `original` is read off the accepted edit's own span in the *source* text
+    rather than carried from the model's proposal, so what this shows is
+    guaranteed to be what the manuscript actually said before the swap, not
+    what the model claimed it was replacing.
+    """
+
+    original: str
+    replacement: str
+    kind: str
+    rule: str
+
+
 class Job(BaseModel):
     """A submitted correction: what it is doing, and what it produced.
 
@@ -34,6 +49,11 @@ class Job(BaseModel):
     handing the original text back on failure is indistinguishable from "this
     text was already clean", which is the mistake this whole shape exists to
     avoid.
+
+    `changes` is every edit that survived into `text`, in reading order — the
+    same count `applied` gives as a number, spelled out one correction at a
+    time. It stays empty until the job completes, and stays empty on a text
+    that needed no correcting at all.
     """
 
     job_id: str
@@ -44,6 +64,7 @@ class Job(BaseModel):
     applied: int = 0
     skipped: int = 0
     rejected: dict[str, int] = {}
+    changes: list[AppliedChange] = []
     errors: list[str] = []
     detail: str | None = None
     usage: dict = {}

@@ -6,6 +6,7 @@ from corrector.edits import (
     apply_edits,
     diff_edits,
     line_spans,
+    partition_edits,
     resolve_edits,
     trim,
 )
@@ -36,6 +37,31 @@ class ApplyEdits(unittest.TestCase):
         result, rejected = apply_edits("hola", [Edit(start=2, end=99, replacement="x")])
         self.assertEqual(result, "hola")
         self.assertEqual([r.reason for r in rejected], ["out_of_bounds"])
+
+
+class PartitionEdits(unittest.TestCase):
+    """The split `apply_edits` is built on: same decisions, but the survivors
+    come back as edits a caller can inspect, not just as spliced text."""
+
+    def test_accepts_non_overlapping_in_order(self):
+        text = "el gato duerme"
+        edits = [
+            Edit(start=3, end=7, replacement="gata"),
+            Edit(start=0, end=2, replacement="La"),
+        ]
+        accepted, rejected = partition_edits(text, edits)
+        self.assertEqual([(e.start, e.end) for e in accepted], [(0, 2), (3, 7)])
+        self.assertEqual(rejected, [])
+
+    def test_rejects_match_what_apply_edits_drops(self):
+        text = "el gato"
+        edits = [
+            Edit(start=0, end=2, replacement="La"),
+            Edit(start=1, end=7, replacement="a gata"),
+        ]
+        accepted, rejected = partition_edits(text, edits)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual([r.reason for r in rejected], ["overlapping"])
 
 
 class ResolveEdits(unittest.TestCase):

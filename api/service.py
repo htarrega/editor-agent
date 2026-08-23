@@ -11,13 +11,14 @@ Nothing here renders anything: a JSON body and an HTML fragment are just two
 ways of showing what these functions return.
 """
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
-from api.jobs import Job, JobStore
+from api.jobs import AppliedChange, Job, JobStore
 from corrector import presets, settings
 from corrector.correct import Corrector
-from corrector.edits import apply_edits
+from corrector.edits import apply_edits, partition_edits
 
 STORE = JobStore()
 
@@ -133,13 +134,49 @@ def run(job_id, text, corrector):
     for rejection in apply_rejections:
         rejected[rejection.reason] = rejected.get(rejection.reason, 0) + 1
 
+    # The edits `apply_edits` actually kept, spelled out one at a time rather
+    # than just counted. `partition_edits` is the same left-to-right decision
+    # `apply_edits` already made — recomputed rather than threaded through,
+    # so this stays a read of what happened rather than a second opinion on it.
+    accepted, _ = partition_edits(text, correction.edits)
+    changes = [_change(text, edit) for edit in accepted]
+
     STORE.complete(
         job_id,
         text=corrected_text,
         proposed=correction.proposed,
-        applied=len(correction.edits) - len(apply_rejections),
+        applied=len(accepted),
         skipped=sum(rejected.values()),
         rejected=rejected,
+        changes=changes,
         errors=correction.errors,
         usage=correction.usage.model_dump(),
+    )
+
+
+_WORD_CHAR = re.compile(r"\w", re.UNICODE)
+
+
+def _change(text: str, edit) -> AppliedChange:
+    """An edit, shown with enough context to read at a glance.
+
+    `edit` is already trimmed to the span that actually changes (`corrector.
+    correct._resolve` does that before it ever reaches here), so a one-letter
+    fix — «gatto» to «gato» — resolves to a single inserted or deleted letter,
+    not a word. Exact, but «t» next to nothing does not read as anything.
+    This widens the span outward to the word boundary on each side purely for
+    display, so what is shown is the whole word before and after — the edit
+    itself, and what it did to, is unchanged.
+    """
+    start, end = edit.start, edit.end
+    while start > 0 and _WORD_CHAR.match(text[start - 1]):
+        start -= 1
+    while end < len(text) and _WORD_CHAR.match(text[end]):
+        end += 1
+
+    return AppliedChange(
+        original=text[start:end],
+        replacement=text[start : edit.start] + edit.replacement + text[edit.end : end],
+        kind=edit.kind,
+        rule=edit.rule,
     )

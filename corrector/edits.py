@@ -96,9 +96,14 @@ def resolve_edits(text, proposals, spans=None):
     return edits, rejected
 
 
-def apply_edits(text, edits):
-    """Apply non-overlapping edits left to right. Overlaps are dropped."""
-    pieces, rejected = [], []
+def partition_edits(text, edits):
+    """Split edits into the ones that can be applied and the ones that cannot.
+
+    Left to right, non-overlapping: the first edit to claim a span keeps it.
+    Split out of `apply_edits` so a caller that wants to know *which* edits
+    survived — not just what the result reads like — has somewhere to ask.
+    """
+    accepted, rejected = [], []
     cursor = 0
     for edit in sorted(edits, key=lambda e: (e.start, e.end)):
         if edit.end > len(text) or edit.start > edit.end:
@@ -107,6 +112,16 @@ def apply_edits(text, edits):
         if edit.start < cursor:
             rejected.append(Rejection(reason="overlapping", detail=repr(edit)))
             continue
+        accepted.append(edit)
+        cursor = edit.end
+    return accepted, rejected
+
+
+def apply_edits(text, edits):
+    """Apply non-overlapping edits left to right. Overlaps are dropped."""
+    accepted, rejected = partition_edits(text, edits)
+    pieces, cursor = [], 0
+    for edit in accepted:
         pieces.append(text[cursor : edit.start])
         pieces.append(edit.replacement)
         cursor = edit.end
