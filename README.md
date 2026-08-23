@@ -1,6 +1,8 @@
 # editor-agent
 
-An autonomous text correction agent, with access to local files and Google Drive.
+An autonomous corrector for literary Spanish. It finds the errors in a manuscript and
+fixes them without rewriting the prose: a pipeline, a harness that scores it, an HTTP API
+and a browser front.
 
 - Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Milestones and state: [`docs/PLAN.md`](docs/PLAN.md) — start at «Where we are»
@@ -36,42 +38,48 @@ H0). Drop clean `.txt` files into `evals/corpus/` first, or `evals.run` stops wi
 `FileNotFoundError`. A fragment must arrive free of typos of its own: on the untouched
 corpus every edit counts as a false positive.
 
-## Speed
+## Modes
 
-**The API ships `corrector-raced`**, which corrects a document in under five seconds.
-`corrector-blocks` — one call for the whole document, ~88 s on 2,000 words, ~87% of it the
-model deliberating — is still the best row measured and still what the harness scores by
-default. So the two words mean different things below: the *reference* row is `blocks`, the
-*shipped* one is `raced`. `EDITOR_AGENT_SYSTEM` switches between them.
+Three configurations ship. `EDITOR_AGENT_SYSTEM` picks one, and `corrector/presets.py`
+refuses a name that is not among them — a typo must not fall back to the default, or a run
+looks fine while measuring something nobody asked for.
 
-| | F0.5 | P | FP/1k clean | s/document | worst | $/10k words |
+| `EDITOR_AGENT_SYSTEM` | s/document | worst | F0.5 | P | $/10k words | |
 |---|---|---|---|---|---|---|
-| `corrector-blocks` (reference) | **0.947** | 0.960 | 0.12 | ~88 | ~90 | **0.019** |
-| **`corrector-raced`** (shipped) | 0.919 | 0.936 | 0.36 | **4.35** | **4.78** | 0.171 |
-| `corrector-fast` | 0.867 | 0.904 | 0.24 | 2.4 | 3.5 | 0.056 |
-| `rules-only` | 0.789 | 0.970 | 0.12 | **0.00** | 0.01 | **0.000** |
+| **`raced`** | **4.35** | 4.78 | 0.919 | 0.936 | 0.171 | **the default, and what the API ships** |
+| `blocks` | ~88 | ~90 | **0.947** | 0.960 | **0.019** | the reference row: best measured, and what the harness scores by default |
+| `fast` | **2.4** | 3.5 | 0.867 | 0.904 | 0.056 | |
+
+Seconds are per document, wall clock, on a 2,000-word fragment; `--repeats 3` on the
+8,254-word corpus. `rules-only` — no model at all — sits under all three at 0.789 F0.5 for
+0.00 s and nothing, which is what the model is being paid for.
 
 ```bash
-python -m evals.run --systems corrector-blocks,corrector-raced,rules-only \
-       --repeats 3 --concurrency 1     # one document at a time, or s/doc measures queueing
+uvicorn api.main:app                               # raced, the default
+EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app    # the reference row
+EDITOR_AGENT_SYSTEM=fast uvicorn api.main:app
+
+# the rows above, re-measured. One document at a time, or s/document
+# measures queueing rather than the pass.
+python -m evals.run --systems corrector-blocks,corrector-raced,corrector-fast,rules-only \
+       --repeats 3 --concurrency 1
 ```
 
-`raced` gets there without giving up the deliberation that recall is made of. One block per
-call already scores 0.948 on its own but takes 19 s, and all 19 are the tail — the median
-call is 4.3 s. So each call is issued **three times at once and the first answer wins**,
-under a hard 4.3 s deadline, with a fast no-reasoning ticket queued first for every block so
-nothing comes back empty. All 32 measured documents finished under five seconds.
+### Why the default is not the best row
+
+`blocks` is one call for the whole document and the best F0.5 measured, but ~87% of its 88
+seconds is the model deliberating, and every row that took the clock down took quality with
+it. `raced` takes the clock down without giving up the deliberation: one block per call
+scores 0.948 on its own but takes 19 s, and all 19 are the tail — the median call is 4.3 s.
+So each call is issued **three times at once and the first answer wins**, under a hard 4.3 s
+deadline, with a fast no-reasoning ticket queued first for every block so nothing comes back
+empty. All 32 measured documents finished under five seconds.
 
 The quality difference is 0.036 against a run-to-run spread of 0.043 — smaller than this
 harness can resolve — and it costs 9× the money. That trade was never the harness's to make;
-**the author took it**. What the harness measures did not move with it: `blocks` is still
+**the author took it.** What the harness measures did not move with it: `blocks` is still
 what `python -m evals.run` scores by default and what every cached report quotes, or the
 rows would stop meaning what they say.
-
-```bash
-EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app    # back to the reference row
-EDITOR_AGENT_SYSTEM=fast uvicorn api.main:app      # 2.4 s, and 0.867 F0.5
-```
 
 Precision is where the clock is paid for, and it is worth seeing on real prose before
 choosing: on an 834-word fragment `blocks` applied 10 edits and invented none, `raced` found
@@ -83,7 +91,7 @@ wrong. Details and the Gemini lead are in `docs/PLAN.md`.
 Nothing below needs a key or the corpus:
 
 ```bash
-python -m unittest discover -s tests -t .    # 242 tests, offline
+python -m unittest discover -s tests -t .    # the whole suite, offline
 ruff format . && ruff check .                # formatting and import order
 ```
 
@@ -106,8 +114,10 @@ measurement — use `--repeats 3` before believing a comparison. The flags are d
 ## API
 
 A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY` and never touches the
-filesystem. Work is submitted and polled rather than awaited — a `blocks` pass runs 60–90 s
-on a 2k-word fragment, and that is not a wait a single request can hide.
+filesystem. Work is submitted and polled rather than awaited: the default mode answers in
+about four seconds, but `blocks` takes 60–90 s on a 2k-word fragment, and that is not a wait
+a single request can hide. One contract for every mode, so changing `EDITOR_AGENT_SYSTEM`
+never changes how the front talks to it.
 
 ```bash
 uvicorn api.main:app
@@ -170,7 +180,7 @@ never in the image.
 | variable | |
 |---|---|
 | `DEEPSEEK_API_KEY` | required — nothing corrects without it |
-| `EDITOR_AGENT_SYSTEM` | `raced` (default), `blocks` or `fast`; only measured rows |
+| `EDITOR_AGENT_SYSTEM` | `raced` (default), `blocks` or `fast` — see [Modes](#modes) |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
 | `EDITOR_AGENT_WEB_DIST` | where the build is; the image already points it at `/app/web/dist` |
 
