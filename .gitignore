@@ -11,7 +11,4 @@ evals/results/
 *.egg-info/
 build/
 dist/
-
-# the front (web/). `dist/` above already covers its build output
-node_modules/
 *.local

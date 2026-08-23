@@ -93,31 +93,32 @@ before believing a comparison. Every flag is in [`evals/README.md`](evals/README
 
 ## API
 
-A FastAPI wrapper over the pipeline. It needs `DEEPSEEK_API_KEY`, and no endpoint takes a
-path: the content travels in the body. Work is submitted and polled rather than awaited —
-`raced` answers in about four seconds and `blocks` takes 60–90 s, and one contract covers
-both, so changing the mode never changes how the front talks to it.
+A FastAPI wrapper over the pipeline, at `/api`. It needs `DEEPSEEK_API_KEY`, and no endpoint
+takes a path: the content travels in the body. Work is submitted and polled rather than
+awaited — `raced` answers in about four seconds and `blocks` takes 60–90 s, and one contract
+covers both, so changing the mode never changes how a client talks to it.
 
 ```bash
 uvicorn api.main:app
 
-curl -X POST localhost:8000/jobs \
+curl -X POST localhost:8000/api/jobs \
   -H 'Content-Type: application/json' \
   -d '{"text": "El niño comio una manzana, y luego se fue ha casa."}'
 # {"job_id": "...", "status": "running", "words": 11}
 
-curl localhost:8000/jobs/<job_id>
+curl localhost:8000/api/jobs/<job_id>
 # {"status": "completed", "text": "El niño comió una manzana, y luego se fue a casa.", ...}
 ```
 
 | | |
 |---|---|
-| `POST /jobs` | `{"text": ...}` in, a job id out. `400` if empty, `413` over `EDITOR_AGENT_MAX_WORDS` |
-| `GET /jobs/{id}` | `status`, and on completion `text`, `applied`, `proposed`, `skipped`, `errors`, `detail` |
-| `GET /health` | answers without building a corrector or reaching a provider |
+| `POST /api/jobs` | `{"text": ...}` in, a job id out. `400` if empty, `413` over `EDITOR_AGENT_MAX_WORDS` |
+| `GET /api/jobs/{id}` | `status`, and on completion `text`, `applied`, `proposed`, `skipped`, `errors`, `detail` |
+| `GET /api/health` | answers without building a corrector or reaching a provider |
 
-Every one answers at `/api/...` as well, which is where the browser looks once the same
-process serves the front — see [Deploy](#deploy).
+This is the one JSON contract, for any programmatic client, and it is not migrated to HTML —
+see [Front](#front) for the browser's own surface, which calls the same `submit_job`/`get_job`
+underneath but answers at the bare paths (`/`, `/jobs`, `/jobs/{id}`) with HTML instead.
 
 A job whose every call failed ends `failed` with the reason in `detail`, never `completed`
 carrying the original text: that would be indistinguishable from "no errors found". One that
@@ -128,56 +129,57 @@ The 2,000-word ceiling is measured, not policy — there is no document-level pa
 
 ## Front
 
-A browser front over the API — paste or upload a manuscript, get it back corrected. Its own
-npm project, and it needs the API running beside it:
+A browser front over the API — paste or upload a manuscript, get it back corrected. Server-
+rendered: `templates/` (Jinja2) and `static/` (vendored HTMX, vanilla CSS/JS, no build step)
+are served by the same process as the API, so one command is the whole development setup:
 
 ```bash
-uvicorn api.main:app                     # one terminal
-cd web && npm install && npm run dev     # the other, http://localhost:5173
+uvicorn api.main:app                     # http://localhost:8000
 ```
 
-The front always calls `/api` on its own origin: in development Vite proxies it to
-`127.0.0.1:8000` and strips the prefix, in production the API process serves the build and
-answers the prefix itself. No CORS either way, and the two cannot drift apart. Details in
-[`web/README.md`](web/README.md).
+There is no second dev server and nothing to build first — HTMX makes the requests the old
+React front made from the browser, the templates render what the JSON API's `Job` already
+carries, and `static/app.js` is left with only what genuinely has to run client-side: reading
+an uploaded file into the textarea, the clipboard, the blob download, Ctrl/Cmd+Enter to
+submit. `GET /`, `POST /jobs` and `GET /jobs/{id}` answer HTML at these same paths the JSON
+API used to share with the browser; the JSON contract itself did not move — see
+[API](#api) — it kept `/api` and gave up the bare paths in exchange.
 
 ## Deploy
 
-One image: the front is built inside it and the API process serves the build, so the browser
-talks to a single origin.
+One image, one stage: there is no build to run first, so the same process that answers
+`/api` serves `templates/` and `static/` straight off disk.
 
 ```bash
 docker build -t editor-agent .
 docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
 ```
 
-`http://localhost:8000` is the front; the API is under `/api` and at the root. Nothing else
-is required — `ANTHROPIC_API_KEY` is the harness's, not the product's, and the corpus is
-never in the image.
+`http://localhost:8000` is the front; the API is under `/api`. Nothing else is required —
+`ANTHROPIC_API_KEY` is the harness's, not the product's, and the corpus is never in the image.
 
 | variable | |
 |---|---|
 | `DEEPSEEK_API_KEY` | required; nothing corrects without it |
 | `EDITOR_AGENT_SYSTEM` | `raced` (default), `blocks` or `fast` — see [Modes](#modes) |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
-| `EDITOR_AGENT_WEB_DIST` | where the build is; the image already points it at `/app/web/dist` |
 
-`/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.
+`/api/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.
 
 Two things to settle before it faces anyone but you:
 
-- **Nothing authenticates or rate-limits `POST /jobs`, and every submission spends money at
-  a provider.** Publish it on `127.0.0.1` as above, or put something authenticating in front.
+- **Nothing authenticates or rate-limits a submission (`POST /api/jobs` or the front's own
+  `POST /jobs`), and every one spends money at a provider.** Publish it on `127.0.0.1` as
+  above, or put something authenticating in front.
 - **Jobs live in the process's memory, newest 256 kept.** One container: a restart loses what
   is in flight, and a second replica behind a round-robin answers `404` to half the polls.
   Scaling out means moving the store out of the process first.
 
-Without a container it is the same three pieces by hand:
+Without a container it is the same one piece by hand:
 
 ```bash
 pip install .
-cd web && npm ci && npm run build && cd ..
-EDITOR_AGENT_WEB_DIST=web/dist uvicorn api.main:app --host 0.0.0.0
+uvicorn api.main:app --host 0.0.0.0
 ```
 
 ## Layout
@@ -186,11 +188,12 @@ EDITOR_AGENT_WEB_DIST=web/dist uvicorn api.main:app --host 0.0.0.0
 |---|---|
 | `corrector/` | the pipeline — the product. Imports nothing from `evals/` |
 | `evals/` | the harness that measures it |
-| `api/` | the HTTP wrapper, and what serves the built front |
-| `web/` | the browser front — [`web/README.md`](web/README.md) |
-| `tests/` | `test_corrector/`, `test_evals/` and `test_api/`, mirroring the three |
+| `api/` | the JSON API (`/api`) and the HTML web router (`/`) — one service layer, two representations; neither duplicates the other's validation or job lookup |
+| `templates/` + `static/` | the browser front: Jinja2 templates and vendored HTMX/CSS/JS, rendered and served by `api/`. No package, no build step |
+| `tests/` | `test_corrector/`, `test_evals/`, `test_api/` and `test_web/`, mirroring the four |
 
-`web/` is the only part `pip install -e .` does not install: an npm project of its own that
-shares no code with `api/`, only the endpoint contract above and one container at deploy
-time. The test directories carry a `test_` prefix so none can shadow the package it tests.
-The suite runs offline, and the one test that wants the corpus skips when it is absent.
+`templates/` and `static/` are not Python and `pip install -e .` does not install them; they
+just have to be on disk next to `api/` wherever it runs, which `Dockerfile` and the commands
+above both already arrange. The test directories carry a `test_` prefix so none can shadow the
+package it tests. The suite runs offline, and the one test that wants the corpus skips when it
+is absent.

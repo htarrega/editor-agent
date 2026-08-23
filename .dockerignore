@@ -12,11 +12,6 @@ __pycache__/
 *.egg-info/
 .ruff_cache/
 
-# Built inside the image, from the lockfile.
-node_modules/
-web/node_modules/
-web/dist/
-
 # Not part of what runs.
 tests/
 docs/
