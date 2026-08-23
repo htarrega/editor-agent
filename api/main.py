@@ -1,4 +1,10 @@
-"""The HTTP surface: submit a text, poll for the correction.
+"""The JSON HTTP surface: submit a text, poll for the correction.
+
+Everything here answers under `/api`. `api/web.py` is the other surface — the
+same two operations, shown as HTML at `/` for a browser instead of JSON for a
+programmatic client. Neither this module nor that one validates a submission
+or looks up a job itself; `api/service.py` is the one place that does, and
+both call it rather than each deciding on its own what a valid text is.
 
 The content travels in the body. There is no endpoint that takes a path —
 `POST /correct-file` was removed rather than patched, because it read any file
@@ -16,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from api.jobs import Job
 from api.service import SubmissionError, get_corrector, get_job, submit_job
-from corrector import settings
+from api.web import WEB
 from corrector.correct import Corrector
 
 app = FastAPI(
@@ -24,14 +30,13 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# The endpoints live on a router rather than on the app because the app serves
-# them at two prefixes at once. The front always calls `/api` on its own
-# origin: in development Vite proxies that to `127.0.0.1:8000` and strips the
-# prefix, so the call lands here as `/jobs`; in production this same process
-# serves the build, and the browser's `/api/jobs` arrives with the prefix
-# intact. Answering both is what lets the front hold one URL for both
-# situations, instead of a build-time switch that can only be wrong in one of
-# them.
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# The JSON endpoints live on their own router, mounted once below under
+# `/api` — separate from the HTML router in `api/web.py`, which answers at
+# `/`. The two used to share this router at two prefixes at once, for a Vite
+# dev proxy that no longer exists now the front is server-rendered by this
+# same process: `/api` is the one place the JSON contract lives now.
 ROUTER = APIRouter()
 
 
@@ -77,31 +82,15 @@ def read(job_id: str):
     return job
 
 
-def mount_web(app, directory=settings.WEB_DIST):
-    """Serve the built front off this app, if there is a build to serve.
+app.include_router(ROUTER, prefix="/api")
 
-    Mounted at `/` and last, so it can never shadow an endpoint — Starlette
-    matches in registration order and the router is already in. `html=True` is
-    what answers `/` with `index.html`.
+# The browser's own front: templates and vanilla JS/CSS, served by this same
+# process off the same origin. `/api`, `/static` and the web router's bare
+# paths (`/`, `/jobs`, `/jobs/{id}`) never overlap, so unlike the old
+# StaticFiles mount this served the React build off, nothing here actually
+# depends on registration order — it is kept in this order anyway because
+# `/api` being the JSON contract and everything after it being the browser's
+# concern is the more readable story.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    A missing directory is the normal case, not an error: a development
-    checkout has no `web/dist`, and StaticFiles refuses to point at a directory
-    that is not there. Returns whether anything was mounted.
-    """
-    path = Path(directory)
-
-    if not path.is_dir():
-        return False
-
-    app.mount("/", StaticFiles(directory=path, html=True), name="web")
-    return True
-
-
-app.include_router(ROUTER)
-
-# The same endpoints again, where the browser looks for them in production.
-# Out of the schema so `/openapi.json` describes one surface rather than each
-# route twice under two names.
-app.include_router(ROUTER, prefix="/api", include_in_schema=False)
-
-mount_web(app)
+app.include_router(WEB, include_in_schema=False)
