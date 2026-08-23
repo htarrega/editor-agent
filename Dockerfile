@@ -33,10 +33,16 @@ WORKDIR /app
 # versions in pyproject.toml — the one thing here that costs money when it
 # misbehaves. `evals/` comes along because it is a declared package; nothing in
 # the image runs it.
+#
+# `.[drive]` and not `.`, at +168 MB on a 329 MB image. The front in here ships
+# a Google Docs tab, and a tab that answers 501 is a worse thing to hand someone
+# than a larger download. Without the extra, mounting the token would not be
+# enough either — the image would have to be rebuilt to use a feature its own UI
+# offers.
 COPY pyproject.toml ./
 COPY corrector/ ./corrector/
 COPY evals/ ./evals/
-RUN pip install .
+RUN pip install ".[drive]"
 
 # `api/` is not an installed package — it is the entry point, and uvicorn finds
 # it because the working directory is on the path.
