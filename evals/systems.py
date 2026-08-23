@@ -404,6 +404,25 @@ BUILDERS = {
             precorrect=True,
         ),
     ),
+    # Untested hypothesis, not a candidate — see `corrector/presets.py:bare`
+    # for the full reasoning and why it is not in `DEFAULT_SYSTEMS` or
+    # `corrector.presets.PRESETS`. `corrector-swept` with deliberation off:
+    # the one combination that could plausibly reach an order-of-magnitude
+    # cut, because it is the only row here that removes the ~85-90% of the
+    # bill deliberation spends rather than shaving it. Every prior attempt to
+    # turn deliberation off measured real recall loss (docs/PLAN.md,
+    # "Settled"); this asks whether that finding still holds once the rules
+    # have already cleared out what they can. Run this first, at
+    # `--repeats 3`, before trusting a number for it.
+    "corrector-bare": lambda: CorrectorSystem(
+        "corrector-bare",
+        Corrector(
+            os.environ.get("EVAL_DEEPSEEK_MODEL", settings.MODEL),
+            bounded_deepseek(os.environ.get("EVAL_BARE_EFFORT", "none")),
+            block_words=int(os.environ.get("EVAL_BLOCK_WORDS", settings.BLOCK_WORDS)),
+            precorrect=True,
+        ),
+    ),
     # The latency row. Three changes from `corrector-blocks`, and each one is
     # the answer to a measurement in docs/PLAN.md rather than a knob turned
     # hopefully:

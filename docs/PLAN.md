@@ -117,19 +117,35 @@ two words that used to name two things — the reference row and the shipped one
 again. `corrector/presets.py` is where the shipped configuration lives, pinned against the
 harness's row by `tests/test_corrector/test_presets.py` so the two cannot drift.
 
-**On the order-of-magnitude question this round of work was chasing:** the honest number is
-`raced` → `blocks`, roughly 2×, with quality *up* — real, and the most defensible number in
-this section, but not ten times. Every other lever tried either cost real quality for a small
-saving (`lean`), cost more for worse quality (`gemini`), or is a genuine further win that
-simply is not confirmed yet (`swept`, which would bring the combined figure to roughly 2.3×
-if its one draw holds). Nothing tried supports a claim past that without either sacrificing
-recall or waiting on a draw this session could not pay for.
+**On the order-of-magnitude question this round of work was chasing:** the honest, measured
+number is `raced` → `blocks`, roughly 2×, with quality *up* — real, and the most defensible
+number in this section, but not ten times. Every other measured lever either cost real quality
+for a small saving (`lean`), cost more for worse quality (`gemini`), or is a genuine further win
+that simply is not confirmed yet (`swept`, which would bring the combined figure to roughly
+2.3× if its one draw holds). One cell of the matrix was identified but not reached:
+`corrector-bare` (`swept` with deliberation off) is the only row that removes rather than
+shaves the reasoning-token majority of the bill, and is unmeasured only because the DeepSeek
+key ran out of balance — not because it was tried and found wanting. Everything else tried
+supports 2-2.3×, not ten times, without either sacrificing recall or waiting on a draw this
+session could not pay for; `bare` is the one open question that could still change that,
+in either direction.
 
 ### What to do next
 
-1. **Confirm `corrector-swept` with a second `--repeats 3` draw** the moment the DeepSeek key
-   has balance again. If it holds, it is the next reversal this file records; if it does not,
-   it joins `lean` as a registered refutation.
+0. **Measure `corrector-bare` first, the moment the DeepSeek key has balance again** —
+   `corrector-swept` with `reasoning_effort=none`. It is the one combination not yet tried that
+   removes rather than shaves the ~85-90% of the bill deliberation spends, so it is the one
+   candidate that could plausibly land near an order of magnitude below `raced`
+   ($0.008-0.010/10k words, extrapolating from `swept`'s and `blocks`' own non-reasoning output
+   share). It asks the same question "Settled" already answered no to four times over — whether
+   the model can be trusted without deliberating — but never on text the rules had already
+   cleared, which is a real gap in what "Settled" covers, not a reason to expect a different
+   answer. `--repeats 3` before trusting a number either way; see
+   `corrector/presets.py:bare` for the reasoning and why it is not in `PRESETS`.
+1. **Confirm `corrector-swept` with a second `--repeats 3` draw**, same key, same balance. If it
+   holds, it is the next reversal this file records; if it does not, it joins `lean` as a
+   registered refutation. Lower priority than `bare` only because `bare` is the row that could
+   change the magnitude of the answer, not just its confidence.
 2. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
    Claude rate — not re-verified this round either). The baseline this document quotes
    throughout has never run on it.

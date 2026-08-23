@@ -176,6 +176,39 @@ def swept():
     )
 
 
+def bare():
+    """`swept`, with deliberation off. Not measured — a hypothesis in code,
+    not a candidate; do not ship or quote a number for this without running
+    it first.
+
+    Every row that keeps deliberation on (`blocks`, `swept`, `lean`) tops out
+    around a 15% cut past `blocks`, because the reasoning tokens deliberation
+    spends are ~85-90% of the bill everywhere they were measured and none of
+    them touched that share. `reasoning_effort=none` is the only switch this
+    codebase has that removes it near-entirely rather than shaving it — which
+    is exactly why `fast` exists and exactly why H1's "Settled" section
+    logs turning it off as a repeated, repeated failure: it finds less *and*
+    overcorrects more, on the raw text. This asks the same question over the
+    text `swept` already cleaned, which nothing here has tried — the failure
+    mode `fast` measured was never isolated from "the model is also being
+    asked about spans the rules would have caught anyway." It may fail the
+    same way anyway; deliberation earning its keep has held up under four
+    different attempts to avoid it (below), which is a strong prior against
+    this one working either. Extrapolating from `swept`'s and `blocks`' own
+    non-reasoning output share (~1,000-1,600 tokens/call), a whole-document
+    pass at zero reasoning tokens would land near $0.008-0.010 per 10k words
+    — inside the order-of-magnitude target, *if* precision and recall survive
+    it, which is the entire open question and the reason this is not
+    `PRICING`'d, presented, or trusted.
+    """
+    return Corrector(
+        model=settings.MODEL,
+        generate=bounded_deepseek("none"),
+        block_words=settings.BLOCK_WORDS,
+        precorrect=True,
+    )
+
+
 def fast():
     """The cheapest way to the clock, and the one that pays for it in quality.
 
@@ -210,6 +243,14 @@ PRESETS = {
     "lean": lean,
     "swept": swept,
 }
+
+# `bare` is deliberately not in `PRESETS`: `EDITOR_AGENT_SYSTEM=bare` would
+# make it selectable in production, and it has never been run once, let
+# alone `--repeats 3`. Reachable from the harness as `corrector-bare`
+# (`evals/systems.py`) for exactly that measurement, and from here as
+# `corrector.presets.bare` for anyone reading this file top to bottom. Move
+# it into this dict, alongside a row in the table above, only after it has
+# numbers — the same rule that governs everything else in this file.
 
 
 def build(name):
