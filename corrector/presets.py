@@ -253,6 +253,17 @@ def swift():
     once. If it does not, that is a real answer too — and a cheaper one to
     get than `bare`'s, since a failing window fails alone rather than taking
     the whole document's call down with it.
+
+    The cost side of that "could plausibly" is not actually in doubt:
+    computed from `swept`'s own already-measured non-reasoning output share
+    (9.7% of its output, at today's off-peak rate) as the floor for a
+    zero-reasoning pass over the same cleaned text, this shape prices at
+    ~$0.0074/10k words — 11× `raced`'s $0.0824, comfortably past an order of
+    magnitude. What is genuinely open is only whether precision and recall
+    survive `reasoning_effort=none` once the rules have already cleared the
+    easy 40%+ of the taxonomy — a narrower, previously-untested question
+    than "does the model need to deliberate at all," which `fast` and four
+    other measurements already answered.
     """
     return Corrector(
         model=settings.MODEL,

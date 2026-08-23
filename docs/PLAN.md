@@ -134,6 +134,22 @@ worse than a window with context. `swift` is the corrected version: `fast`'s own
 sacrificing recall or waiting on a draw this session could not pay for; `swift` is the one open
 question grounded enough to change that answer rather than merely hope to.
 
+**The cost side of that question is not actually in doubt — only the quality side is, and it is
+worth being precise about which.** Reasoning tokens are ~86-90% of every deliberating row's
+output; strip them to zero and what is left is only what a call needs to *state* the edits it
+found. Computed from `swept`'s own already-measured non-reasoning output (939.9 tokens/call,
+9.7% of its output — the honest floor for `swift`, which starts from the same rule-cleaned text)
+at today's off-peak rate: **$0.0074/10k words, 11.1× `raced`'s $0.0824.** The arithmetic clears
+the target with room to spare. (The same floor computed from `blocks`' own non-reasoning share
+instead — 13.9%, before the rules removed anything — is $0.0096/10k, 8.6×; which floor is the
+right one to quote depends on which text `swift` is really reading, and it reads the cleaned
+one.) So the honest statement is not "10× is out of reach" — it is **"10× is arithmetically
+available and has never been quality-tested,"** which is a narrower and more answerable
+question than this section spent most of a day treating it as. Every prior test of
+`reasoning_effort=none` (`fast`, and the four failures logged under "Settled") asked it of a
+model reading text the rules had *not* yet cleared — a different, harder question than the one
+`swift` asks, and the reason `fast`'s 0.867 is a prior for `swift`, not a verdict on it.
+
 ### What to do next
 
 0. **Measure `corrector-swift` first, the moment the DeepSeek key has balance again** —
