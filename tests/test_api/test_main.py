@@ -256,6 +256,12 @@ class ProductionCorrectorReadsSettings(unittest.TestCase):
     """
 
     def test_get_corrector_reads_settings_rather_than_literals(self):
+        # Pinned to "blocks" rather than whatever SYSTEM currently defaults
+        # to: `bare` and `fast` hardcode `reasoning_effort="none"` by design
+        # (that hardcoding is the whole point of them), so they would fail
+        # this test for a reason that has nothing to do with the bug it
+        # guards against. "blocks" is a preset that is supposed to read
+        # `settings.EFFORT`, and reading it is what this test checks.
         recorded = {}
 
         def fake_bounded(effort):
@@ -263,6 +269,7 @@ class ProductionCorrectorReadsSettings(unittest.TestCase):
             return lambda model, system, user: None
 
         with (
+            mock.patch.object(settings, "SYSTEM", "blocks"),
             mock.patch.object(settings, "MODEL", "sentinel-model"),
             mock.patch.object(settings, "EFFORT", "sentinel-effort"),
             mock.patch.object(settings, "BLOCK_WORDS", 7),

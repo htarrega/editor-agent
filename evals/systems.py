@@ -404,14 +404,16 @@ BUILDERS = {
             precorrect=True,
         ),
     ),
-    # Untested hypothesis, and probably not the one to measure first — see
-    # `corrector-swift`, below, and `corrector/presets.py:bare`. `swept` with
-    # deliberation off, over the *whole document at once*; docs/PLAN.md's own
-    # "Settled" section already has the relevant row, found after this one
-    # was written: at `reasoning_effort=none`, whole-document context scores
-    # P 0.756 against 0.935 windowed. Kept registered rather than deleted —
-    # a documented dead end over a quiet one — but `corrector-swift` is the
-    # better-grounded first thing to run.
+    # The row that met the goal. `swept` with deliberation off, over the
+    # whole document — the shape docs/PLAN.md's "Settled" section already
+    # measured as worse at `reasoning_effort=none` (whole document beside a
+    # window: P 0.756 against 0.935). That measurement was on text the rules
+    # had not cleared; on `swept`'s cleaned text it is a different question,
+    # and this is the answer: three independent `--repeats 3` draws
+    # (different seeds), pooled, F0.5 0.902 at $0.0083/10k words — 9.97x
+    # `raced`'s $0.0824, at higher quality than `raced` itself (0.860). See
+    # `corrector/presets.py:bare` for the individual draws and what shipping
+    # this required correcting first (`corrector-swift`, refuted, below).
     "corrector-bare": lambda: CorrectorSystem(
         "corrector-bare",
         Corrector(
@@ -421,19 +423,17 @@ BUILDERS = {
             precorrect=True,
         ),
     ),
-    # The latency row. Three changes from `corrector-blocks`, and each one is
-    # the answer to a measurement in docs/PLAN.md rather than a knob turned
-    # hopefully:
-    #
-    #  · `window_blocks` splits the calls over *responsibility* while every one
-    #    of them still reads the document — which is what `corrector-batched`
-    #    gave up, and what its 0.039 F0.5 bought back.
-    #  · `reasoning_effort=none` is the only setting that puts a call under
-    #    five seconds; at `minimal` the median call is 8.4 s and the slowest 38.
-    #  · `mechanical` is what pays for the deliberation being gone. The four
-    #    orthotypographic types are decidable, the model is measurably bad at
-    #    them with or without deliberation, and the rule pack scores 150 of the
-    #    corpus's 495 seeded errors at P 0.974 in microseconds.
+    # The latency row, not the cost one — re-measured 2026-08-24 alongside
+    # `corrector-swift`: F0.5 0.870 at $0.0888/10k words, *more* than
+    # `corrector-blocks`' $0.0395-0.0415. `window_blocks` buys the clock by
+    # splitting calls over *responsibility* while every one of them still
+    # reads the document (unlike `corrector-batched`, which gave that up for
+    # 0.039 F0.5) — but re-sending that context on 549 calls instead of 16
+    # costs more in input tokens than the tiny no-reasoning output saves.
+    # `reasoning_effort=none` is still the only setting that puts a call
+    # under five seconds, and `mechanical` still pays back some of what
+    # turning deliberation off costs in recall. Cheap in wall clock, not in
+    # dollars — see `corrector/presets.py:swift` for the full accounting.
     "corrector-fast": lambda: CorrectorSystem(
         "corrector-fast",
         Corrector(
@@ -450,14 +450,16 @@ BUILDERS = {
             mechanical=True,
         ),
     ),
-    # Untested, but the best-grounded of the unmeasured candidates — see
-    # `corrector/presets.py:swift`. One line different from `corrector-fast`:
-    # mechanical=True (post-hoc) becomes precorrect=True (pre-applied), same
-    # window/context/effort otherwise, so a measurement of this reads as what
-    # pre-applying the rules did to `fast`'s own 0.867 F0.5, not a new shape
-    # with three things different at once. Run this, not `corrector-bare`,
-    # first — the whole-document shape `bare` uses is the one docs/PLAN.md's
-    # own "Settled" section already found worse at `reasoning_effort=none`.
+    # Measured 2026-08-24 and refuted, on the axis that was never actually in
+    # doubt — see `corrector/presets.py:swift` for the full account. F0.5
+    # 0.879, close to `corrector-fast`'s 0.870 (deliberation off still costs
+    # recall, pre-applied rules or not), at $0.0881/10k words — *more* than
+    # `corrector-blocks`, not the ~11x less this row's docstring predicted
+    # from `swept`'s output-token share alone. The gap was on the input
+    # side: 549 calls each re-sending `context_blocks=12` costs more than
+    # `blocks`' 16 calls save by not deliberating on the mechanically-easy
+    # spans. Kept registered as the second corrected mistake in this file,
+    # after `corrector-bare`.
     "corrector-swift": lambda: CorrectorSystem(
         "corrector-swift",
         Corrector(
@@ -558,21 +560,28 @@ BUILDERS = {
 # run when the question is which of the two is doing the work, not what the
 # pipeline currently scores.
 #
-# `corrector-blocks` is the one row here now, reference and shipped at once
-# (`EDITOR_AGENT_SYSTEM`, `corrector/presets.py`) — it was only the reference
-# while `corrector-raced` shipped instead. `raced` dropped out of the default
-# set the way `fast` and `verified` already were: still registered, still
-# buildable by name, but not what a plain run scores, because it is not what
-# a plain deployment runs. Its own row is worth repeating on request more than
-# most — it issues each call three times and keeps whichever answers first, so
-# which edits survive is not fixed from run to run, and its quality reading
-# depends on how fast the provider was that hour (docs/PLAN.md, "The deadline
-# was a bet") in a way none of the other rows do.
+# `corrector-blocks` is the reference row — the shape every other row here is
+# measured against, and no longer what ships. `corrector-bare` is what ships
+# (`EDITOR_AGENT_SYSTEM`, `corrector/presets.py`): both stay in the default
+# set for the same reason `corrector-raced` did while it shipped and
+# `corrector-blocks` was still only the reference — leaving the shipped one
+# out is how a deployment quietly stops being measured. `raced` itself
+# dropped out the way `fast` and `verified` already were: still registered,
+# still buildable by name, but not what a plain run scores, because it is
+# not what a plain deployment runs. Its own row is worth repeating on request
+# more than most — it issues each call three times and keeps whichever
+# answers first, so which edits survive is not fixed from run to run, and its
+# quality reading depends on how fast the provider was that hour
+# (docs/PLAN.md, "The deadline was a bet") in a way none of the other rows do.
+# `corrector-bare` inherits a milder version of the same caution: one draw in
+# three saw 2 of 16 calls return unparseable JSON, so its own number moves
+# more between runs than `corrector-blocks`' does.
 DEFAULT_SYSTEMS = [
     "null",
     "languagetool",
     "naive-claude",
     "corrector-blocks",
+    "corrector-bare",
 ]
 
 

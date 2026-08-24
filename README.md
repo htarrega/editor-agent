@@ -37,57 +37,61 @@ false positive.
 
 ## Modes
 
-`EDITOR_AGENT_SYSTEM` picks one of four, and an unknown name is an error rather than a
-fallback to the default. `$/10k words` is computed from each row's own input/output tokens at
-the rate that actually applied when it ran (`corrector/llm.py`); numbers below are 2026-08-24
-except `fast`'s, which predates a DeepSeek pricing change and is not directly comparable — see
-`docs/PLAN.md`, "The deadline was a bet".
+`EDITOR_AGENT_SYSTEM` picks one of six, and an unknown name is an error rather than a fallback
+to the default. `$/10k words` is computed from each row's own input/output tokens at the rate
+that actually applied when it ran (`corrector/llm.py`); numbers below are 2026-08-24.
 
 | `EDITOR_AGENT_SYSTEM` | s/document | F0.5 | P | $/10k words | |
 |---|---|---|---|---|---|
-| **`blocks`** | ~74 | **0.963** | 0.974 | 0.0415 | **default; what the API ships; two consistent draws** |
-| `raced` | **5.6** | 0.860 | 0.933 | 0.0824 | no longer shipped — the deadline is a bet on the hour |
-| `fast`¹ | **2.4** | 0.867 | 0.904 | 0.056¹ | |
+| **`bare`** | ~7.5 | **0.902**¹ | 0.914 | **0.0083**¹ | **default; what the API ships; three draws, pooled** |
+| `blocks` | ~74 | 0.963 | 0.974 | 0.0415 | reference row; best F0.5 measured |
+| `swept` | ~60-66 | 0.942-0.952 | 0.946-0.955 | 0.0353-0.0354 | higher quality than `bare`, ~4× its cost |
+| `raced` | 5.6 | 0.860 | 0.933 | 0.0824 | no longer shipped — the deadline is a bet on the hour |
+| `swift` | 3.8 | 0.879 | 0.916 | 0.0881 | refuted — costs more than `blocks`, not less |
+| `fast` | 2.4 | 0.870 | 0.910 | 0.0888 | refuted — same windowing cost as `swift` |
 
-¹ Not re-measured on 2026-08-24; its row is the pre-2026-08-16 one.
+¹ Pooled across three draws (different seeds) — see `corrector/presets.py:bare`.
 
-Two more names work with `EDITOR_AGENT_SYSTEM` but are not the default — `lean` (refuted:
-cheaper, real recall lost) and `swept` (promising, one draw, not two — see
-`corrector/presets.py`) — because nothing here becomes the default off less evidence than the
-row it would replace. `rules-only` — no model at all — sits under every row above at 0.789
-F0.5, for 0.00 s and nothing.
+`lean` also works with `EDITOR_AGENT_SYSTEM` but is not the default — refuted, cheaper for real
+recall lost — because nothing here becomes the default off less evidence than the row it would
+replace. `rules-only` — no model at all — sits under every row above at 0.789 F0.5, for 0.00 s
+and nothing.
 
 ```bash
-uvicorn api.main:app                               # blocks, the default
-EDITOR_AGENT_SYSTEM=raced uvicorn api.main:app
-EDITOR_AGENT_SYSTEM=fast uvicorn api.main:app
+uvicorn api.main:app                               # bare, the default
+EDITOR_AGENT_SYSTEM=swept uvicorn api.main:app      # higher quality, ~4x the cost
+EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app
 
 # the rows above, re-measured. One document at a time, or s/document
 # measures queueing rather than the pass.
-python -m evals.run --systems corrector-blocks,corrector-raced,corrector-fast,rules-only \
+python -m evals.run --systems corrector-bare,corrector-blocks,corrector-swept,rules-only \
        --repeats 3 --concurrency 1
 ```
 
 `blocks` is one call for the whole document, and most of its ~74 seconds is the model
-deliberating. `raced` keeps the deliberation and drops the tail: every call goes out **three
-times at once and the first answer wins**, under a hard 4.3 s deadline, with a no-reasoning
-ticket queued first so no block comes back empty. That bought a quality difference inside the
-harness's own run-to-run spread — on the day it was measured. Re-measured, alone and
-uncontended, the deadline cost real recall: the provider was slower that hour, more blocks
-missed their deliberated attempts, and the cheap fallback answered instead. `blocks` is now
-both cheaper and better measured, which is why it ships.
+deliberating. `raced` kept the deliberation and dropped the tail: every call issued **three
+times at once, first answer wins**, under a hard 4.3 s deadline, with a no-reasoning ticket
+queued first so no block came back empty. That bought a quality difference inside the harness's
+own run-to-run spread — on the day it was measured. Re-measured, alone and uncontended, the
+deadline cost real recall: the provider was slower that hour, more blocks missed their
+deliberated attempts, and the cheap fallback answered instead — F0.5 0.860, not the 0.919 it
+shipped on. `blocks` replaced it: cheaper and better at once.
 
-Two cost candidates were tried past `blocks` and neither is shipped. `lean` — the same single
-call, asked about fewer error types — barely shortened the model's own reasoning and cost real
-recall to ask for less. `swept` runs the free rule pack *before* the call instead of after, so
-the model reads a text with nothing left in it that looks like the four rule-decidable error
-types, rather than being told to ignore them where it sees them; measured once, that was 15%
-cheaper than `blocks` with recall slightly *up*, not down — but it is one draw, this document's
-own bar for a claim is `--repeats 3`, and the DeepSeek key ran out of balance mid-run before a
-second draw could confirm it. A paid Gemini key was also tried, settling a question this file
-used to leave open: `gemini-2.5-flash`, one call, the whole document — F0.5 0.934 at $0.107 per
-10k words, worse *and* over twice `blocks`' cost. The numbers for all of this are in
-`docs/PLAN.md`.
+`swept` runs the free rule pack *before* the call instead of after, so the model reads a text
+with nothing left in it that looks like the four rule-decidable error types, rather than being
+told to ignore them where it sees them — confirmed on two draws, ~12-15% cheaper than `blocks`
+with recall at or above it, not traded away. `bare` is `swept` with deliberation switched off
+entirely. That shape was expected to fail — every earlier test of `reasoning_effort=none` in
+this codebase, on raw text, cost real recall — but nobody had tried it on text the rule pack
+had already cleared. On three independent draws it did not fail: F0.5 0.902 pooled, *above*
+`raced`'s own 0.860, at $0.0083 per 10k words. `swift` and `fast` were the reasoned, windowed
+guess for the same idea and were refuted by measurement — 549 small calls each re-sending
+their context costs more in input tokens than a near-empty output saves; `bare` keeps `swept`'s
+16-call shape and avoids that entirely. A paid Gemini key was tried too, settling a question
+this file used to leave open: `gemini-2.5-flash`, one call, the whole document — F0.5 0.934 at
+$0.107 per 10k words, worse *and* over twice `blocks`' cost. The full numbers, including the
+three individual `bare` draws and what `reasoning_effort=none` occasionally does to a reply's
+JSON, are in `docs/PLAN.md`.
 
 ## Run
 
@@ -117,8 +121,8 @@ before believing a comparison. Every flag is in [`evals/README.md`](evals/README
 
 A FastAPI wrapper over the pipeline, at `/api`. It needs `DEEPSEEK_API_KEY`, and no endpoint
 takes a path: the content travels in the body. Work is submitted and polled rather than
-awaited — `blocks` takes 60–90 s and `raced` answers in about five, and one contract covers
-both, so changing the mode never changes how a client talks to it.
+awaited — `bare` answers in a few seconds, `blocks` takes 60–90 s, and one contract covers
+every mode, so changing it never changes how a client talks to the API.
 
 ```bash
 uvicorn api.main:app
@@ -187,7 +191,7 @@ docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
 | variable | |
 |---|---|
 | `DEEPSEEK_API_KEY` | required; nothing corrects without it |
-| `EDITOR_AGENT_SYSTEM` | `blocks` (default), `raced`, `fast`, `lean` or `swept` — see [Modes](#modes) |
+| `EDITOR_AGENT_SYSTEM` | `bare` (default), `blocks`, `swept`, `raced`, `fast` or `lean` — see [Modes](#modes) |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
 
 `/api/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.

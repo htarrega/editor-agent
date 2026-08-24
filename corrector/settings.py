@@ -23,20 +23,34 @@ BLOCK_WORDS = int(
 
 # Which measured configuration the API runs. One of `corrector/presets.py`.
 #
-# `blocks` and not `raced`, reversing the earlier call. Re-measured
-# `--repeats 3` on 2026-08-24: `raced` alone, uncontended, scored F0.5 0.860 —
-# not 0.919. Its deadline is a bet on the provider being as fast as it was the
-# day it was tuned; that day it was not, and the redundancy that is supposed
-# to buy the bet back ($0.0824 against `blocks`' $0.0415 per 10k words, both
-# at today's rate) did not save it. `blocks` scored 0.963 the same day, at
-# roughly half `raced`'s cost — cheaper *and* better, which is not a trade at
-# all. Neither figure is the "9x"/"0.019" pair `docs/PLAN.md`'s older rows
-# quote: those used a since-corrected DeepSeek rate and, for `raced`, what
-# looks like a units mismatch never caught before now — see docs/PLAN.md,
-# "The deadline was a bet", for the reconciliation.
+# `bare` — `swept`'s rule-pack-first text, `reasoning_effort=none`. Three
+# independent `--repeats 3` draws (different seeds), pooled: **F0.5 0.902 at
+# $0.0083 per 10k words — 9.97x `raced`'s $0.0824, at a quality `raced` has
+# never itself delivered (0.860).**
+#
+# The chain that got here, all 2026-08-24: `raced`, re-measured alone and
+# uncontended, scored 0.860 rather than the 0.919 it shipped on — its
+# deadline is a bet on the provider's pace, lost that day. `blocks` replaced
+# it, cheaper and better at once. `swept` replaced `blocks` — the same rule
+# pack, run before the call instead of after, ~12-15% cheaper with quality
+# inside noise, confirmed on two draws. `swift` and `fast` were the reasoned
+# prediction for where the next order of magnitude would come from —
+# windowed, `reasoning_effort=none` — and both measured *more* expensive
+# than `blocks`: 549 calls each re-sending `context_blocks=12` costs more in
+# input tokens than a near-empty output saves. `bare` is what that refutation
+# pointed at instead: `swept`'s whole-document shape (16 calls, not 549)
+# with deliberation off. Every prior test of `reasoning_effort=none` in this
+# codebase ran on text the rule pack had not yet cleared; this is the first
+# one that did not, and it is the one that worked. See docs/PLAN.md, "The
+# deadline was a bet", and `corrector/presets.py:bare` for the individual
+# draws — one of three saw 2 of 16 calls return unparseable JSON, which
+# `Corrector` already treats as a missed block, not a corrupted one.
+#
+# `swept` stays registered and selectable (`EDITOR_AGENT_SYSTEM=swept`) for
+# whoever wants the last ~9 points of F0.5 back at roughly 4x the cost.
 SYSTEM = os.environ.get(
     "EDITOR_AGENT_SYSTEM",
-    "blocks",
+    "bare",
 )
 
 # Where the built front lives, when the API is the thing serving it. A missing

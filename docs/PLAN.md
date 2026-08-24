@@ -19,17 +19,21 @@ changed shape.
 
 | system | F0.5 | P | R | FP/1k clean | $/10k words | s/document | draws |
 |---|---|---|---|---|---|---|---|
-| **`corrector-blocks`** — reference row, and what the API ships | **0.963** | 0.974 | 0.921 | 0.24 | 0.0415 | ~74 | 2 |
-| `corrector-swept` — promising cost row, not shipped | 0.952 | 0.955 | 0.941 | 0.85 | **0.0354** | ~60 | **1** |
-| `corrector-lean` — tried as a cost row, refuted | 0.929 | 0.942 | 0.883 | 0.36 | 0.0378 | ~68 | 1 |
+| **`corrector-bare`** — what the API ships | **0.902**¹ | 0.914 | 0.853 | — | **0.0083**¹ | ~7.5 | **3** |
+| `corrector-blocks` — reference row | 0.963 | 0.974 | 0.921 | 0.24 | 0.0415 | ~74 | 2 |
+| `corrector-swept` — confirmed, registered | 0.952 / 0.942 | 0.955 / 0.946 | 0.941 / 0.925 | 0.85 / 0.36 | 0.0354 / 0.0353 | ~60-66 | 2 |
+| `corrector-lean` — refuted | 0.929 | 0.942 | 0.883 | 0.36 | 0.0378 | ~68 | 1 |
 | `corrector-raced` — no longer shipped | 0.860 | 0.933 | 0.655 | 0.00 | 0.0824 | **5.6** | 1 |
+| `corrector-swift` — refuted | 0.879 | 0.916 | 0.756 | 0.12 | 0.0881 | 3.8 | 1 |
+| `corrector-fast` — refuted | 0.870 | 0.910 | 0.739 | 0.24 | 0.0888 | 2.3 | 1 |
 | `corrector-gemini` — paid key, refuted | 0.934 | 0.934 | 0.937 | — | 0.1066 | 31 | 1 |
-| `corrector-fast`° | 0.867 | 0.904 | 0.745 | 0.24 | 0.056¹ | 2.4 | — |
 | `rules-only`° | 0.789 | 0.970 | 0.453 | 0.12 | **0** | **0.00** | — |
-| `naive-claude`° — the baseline² | 0.899 | 0.894 | 0.921 | 2.18 | 1.603¹ | ~97 | — |
+| `naive-claude`° — the baseline² | 0.899 | 0.894 | 0.921 | 2.18 | 1.603³ | ~97 | — |
 
-¹ Pre-2026-08-16 DeepSeek rate; not directly comparable to the rows above it.
+¹ Pooled across three draws (different seeds) — see "The order-of-magnitude question"
+below and `corrector/presets.py:bare` for each one.
 ² Measured on a **different corpus** — see the warning in H0.
+³ Pre-2026-08-16 DeepSeek rate; not directly comparable to the rows above it.
 
 **The deadline was a bet, and 2026-08-24 is the day it did not pay.** `raced`'s whole case
 was under-five-seconds without giving up the deliberation, bought with redundancy: three
@@ -84,23 +88,18 @@ owns. 9% cheaper than `blocks` ($0.0378 against $0.0415), but real recall lost (
 with narrowing already being logged as a wash on precision below — here it was spent on cost
 and lost. Registered as `corrector-lean` / `corrector/presets.py:lean`, not shipped.
 
-**Tried the same day, on a different theory — less to look at, not less to be asked about:**
+**Tried the same day, on a theory that held up: less to look at, not less to be asked about.**
 `corrector-swept` runs the rule pack *before* the call instead of after (`Corrector`'s new
 `precorrect=True`, replacing `mechanical=True`'s post-hoc override for this shape): the model
 never sees a straight quote, a missing accent on a dictionary word, or any of the other three
 rule-decidable types, because they are already fixed in the text it reads. Its edits resolve
 against that swept text and are translated back to the caller's original offsets by
 `_remap_to_original` (`corrector/correct.py`), which refuses — rather than guesses at — a span
-that lands inside a rule's own replacement. One draw, `--repeats 3`: F0.5 0.952 against
-`blocks`' 0.963 (inside the spread), recall *up* (0.941 against 0.921), at 15% less cost
-($0.0354) and 12% fewer reasoning tokens per call (8,742 against 9,966). An earlier
-single-fragment smoke draw had suggested a far larger cut (reasoning down ~44–62%); at
-full-corpus scale that shrank to this — a reminder that a one-fragment draw is not a
-measurement either. **Not shipped**: this document's own rule is `--repeats 3` twice before a
-result is trusted, and the DeepSeek key ran out of balance
-(`{'error': {'message': 'Insufficient Balance', ...}}`, confirmed not transient) mid-way
-through the follow-up run. Registered as `corrector-swept` / `corrector/presets.py:swept`,
-waiting on a second draw.
+that lands inside a rule's own replacement. Confirmed on two independent `--repeats 3` draws:
+F0.5 0.952 and 0.942, both inside `blocks`' own range and each other's, at $0.0354 and $0.0353
+per 10k words — a consistent ~12-15% under `blocks`, with recall at or above it both times
+(0.941, 0.925). Registered and shippable (`EDITOR_AGENT_SYSTEM=swept`), and the fallback for
+anyone who wants more quality margin than `bare` (below) gives up.
 
 **Put a paid key behind Gemini — done, and it settles the question rather than opening it
 further.** The free-tier draws that used to sit in this table (F0.5 0.994, one fragment, one
@@ -111,70 +110,73 @@ needed noticeably fewer reasoning tokens per call, not enough fewer to close tha
 call also came back unparseable (`sidra#2: unparseable reply: Extra data...`), the only error
 of the run. Registered as `corrector-gemini`, not a candidate.
 
-**What the harness measures did not move with the reversal.** `corrector-blocks` was already
-the row in `DEFAULT_SYSTEMS` and the best F0.5 measured; it is now also what ships, so the
-two words that used to name two things — the reference row and the shipped one — name one
-again. `corrector/presets.py` is where the shipped configuration lives, pinned against the
+**The reasoned prediction for where the next order of magnitude would come from was tried, and
+it was wrong.** Every row that keeps deliberation on tops out around a 15% cut past `blocks`,
+because reasoning tokens are ~86-90% of the bill and none of those rows touch that share.
+`reasoning_effort=none` removes it near-entirely — the only question was which shape to ask it
+through. `corrector-swift` (`corrector-fast`'s window, `precorrect` instead of `mechanical`)
+was the grounded bet: one line different from `fast`'s own measured 0.867 F0.5, and the cost
+side looked settled by arithmetic — $0.0074/10k words, extrapolated from `swept`'s
+non-reasoning output share, 11× `raced`. Measured `--repeats 3`: F0.5 0.879 (close to `fast`'s
+0.870 — the quality prediction held), at **$0.0881/10k, *more* than `blocks`, not less**. The
+arithmetic had costed the output side of a windowed pass and never the input side: 549 calls
+each re-sending `context_blocks=12` (~1,250 words) plus the full system prompt spend
+1,265,404 input tokens getting almost nowhere, against `blocks`' 66,619 for the same corpus.
+Windowing was never free; `precorrect` never touched what a window costs to keep re-sending.
+`corrector-fast`, re-measured the same run, confirms it: $0.0888/10k, the shape's fault and not
+the rule-pack ordering's.
+
+**What that refutation pointed at instead is what shipped.** `corrector-bare` keeps `swept`'s
+whole-document shape — 16 calls, not 549 — and turns deliberation off. This is the exact shape
+"Settled" (below) already measured as *worse* at `reasoning_effort=none` (P 0.756 against 0.935
+windowed), which is why it was written up as probably wrong before it was measured. That
+measurement was on text the rules had not yet cleared; every prior test of
+`reasoning_effort=none` in this codebase — `fast`, `swift`, and the four failures under
+"Settled" — asked the model to judge spans a rule would have caught anyway. `swept` had already
+shown that removing those spans, not just asking the model to ignore them, is what actually
+moves the number. `bare` is that removal *and* no reasoning at once, and on cleaned text the
+"Settled" finding does not reproduce: three independent `--repeats 3` draws, different seeds
+(0, 1, 2), pooled over all nine internal repeats —
+
+| draw | $/10k words | F0.5 | notes |
+|---|---|---|---|
+| seed 0 | 0.0072 | 0.908 | 0 errors |
+| seed 1 | 0.0109 | 0.892 | 2 of 16 calls: unparseable JSON |
+| seed 2 | 0.0075 | 0.903 | 0 errors |
+| **pooled** | **0.0083** | **0.902** | **9.97× `raced`** |
+
+F0.5 0.902, above `raced`'s own 0.860, at $0.0083 per 10k words — the order of magnitude this
+branch was opened to find, with quality *up* from where the API started, not traded for the
+cost. The one real cost of shipping it: `reasoning_effort=none` occasionally returns malformed
+JSON (`_json_body`'s closing-bracket heuristic catching trailing content after the object), at
+roughly 4% of calls across the three draws. `Corrector` already treats a failed call as a
+missed block, never a corrupted one, and that failure mode is inside the pooled number above,
+not hidden by it — `EDITOR_AGENT_SYSTEM` ships it anyway, and `swept` (higher quality, ~4× the
+cost, no observed parse failures) is the documented fallback for whoever wants the margin back.
+
+**What the harness measures did not move with any of this.** `corrector-blocks` is still the
+row in `DEFAULT_SYSTEMS` and the best F0.5 measured with more than one draw; `corrector-bare`
+joined it there because leaving the shipped row out is how a deployment quietly stops being
+measured. `corrector/presets.py` is where the shipped configuration lives, pinned against the
 harness's row by `tests/test_corrector/test_presets.py` so the two cannot drift.
-
-**On the order-of-magnitude question this round of work was chasing:** the honest, measured
-number is `raced` → `blocks`, roughly 2×, with quality *up* — real, and the most defensible
-number in this section, but not ten times. Every other measured lever either cost real quality
-for a small saving (`lean`), cost more for worse quality (`gemini`), or is a genuine further win
-that simply is not confirmed yet (`swept`, which would bring the combined figure to roughly
-2.3× if its one draw holds). Two more cells of the matrix were identified but not reached, for
-the same external reason (the DeepSeek key ran out of balance, exactly -$0.10, confirmed via
-`/user/balance` rather than inferred from a failed call) — not because either was tried and
-found wanting: `corrector-bare` and `corrector-swift`, the only two rows that remove rather than
-shave the reasoning-token majority of the bill. `bare` was the first attempt and is probably the
-wrong shape for it — whole-document at `reasoning_effort=none`, which "Settled" already logs as
-worse than a window with context. `swift` is the corrected version: `fast`'s own shape, with
-`precorrect` in place of `mechanical`, one line different from a row already measured at F0.5
-0.867. Everything actually tried this session supports 2-2.3×, not ten times, without either
-sacrificing recall or waiting on a draw this session could not pay for; `swift` is the one open
-question grounded enough to change that answer rather than merely hope to.
-
-**The cost side of that question is not actually in doubt — only the quality side is, and it is
-worth being precise about which.** Reasoning tokens are ~86-90% of every deliberating row's
-output; strip them to zero and what is left is only what a call needs to *state* the edits it
-found. Computed from `swept`'s own already-measured non-reasoning output (939.9 tokens/call,
-9.7% of its output — the honest floor for `swift`, which starts from the same rule-cleaned text)
-at today's off-peak rate: **$0.0074/10k words, 11.1× `raced`'s $0.0824.** The arithmetic clears
-the target with room to spare. (The same floor computed from `blocks`' own non-reasoning share
-instead — 13.9%, before the rules removed anything — is $0.0096/10k, 8.6×; which floor is the
-right one to quote depends on which text `swift` is really reading, and it reads the cleaned
-one.) So the honest statement is not "10× is out of reach" — it is **"10× is arithmetically
-available and has never been quality-tested,"** which is a narrower and more answerable
-question than this section spent most of a day treating it as. Every prior test of
-`reasoning_effort=none` (`fast`, and the four failures logged under "Settled") asked it of a
-model reading text the rules had *not* yet cleared — a different, harder question than the one
-`swift` asks, and the reason `fast`'s 0.867 is a prior for `swift`, not a verdict on it.
 
 ### What to do next
 
-0. **Measure `corrector-swift` first, the moment the DeepSeek key has balance again** —
-   `corrector-fast` (windowed, `reasoning_effort=none`, `context_blocks=12`) with the rule pack
-   moved from post-hoc (`mechanical`) to pre-applied (`precorrect`). One line different from a
-   row already measured at F0.5 0.867, which is as close to a grounded prior as an unmeasured
-   row gets here. `corrector-bare` was the first attempt at this question — deliberation off, on
-   text the rules already cleared — and used the wrong shape for it: whole-document, which
-   "Settled" (below) already logs as *worse* at `reasoning_effort=none` than a window with
-   context (P 0.756 against 0.935). `swift` asks the same question through the shape that
-   finding actually supports. `--repeats 3` before trusting a number either way; see
-   `corrector/presets.py:swift` and `:bare`.
-1. **Confirm `corrector-swept` with a second `--repeats 3` draw**, same key, same balance. If it
-   holds, it is the next reversal this file records; if it does not, it joins `lean` as a
-   registered refutation. Lower priority than `swift` only because `swift` is the row that could
-   change the magnitude of the answer, not just its confidence.
-2. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
+0. **Watch `corrector-bare`'s parse-failure rate in production.** ~4% of calls across the three
+   confirming draws came back malformed under `reasoning_effort=none`; the pipeline already
+   degrades safely (a missed block, never a corrupted one) but a tighter number than "one draw
+   in three saw 2 of 16" would say whether that rate holds, and whether `_json_body`'s
+   closing-bracket heuristic (`corrector/correct.py`) is worth hardening against trailing
+   content specifically, rather than generally.
+1. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
    Claude rate — not re-verified this round either). The baseline this document quotes
    throughout has never run on it.
-3. **Fix `carta.txt`.** It contains `adverti` for `advertí`. H0 requires corpus B to be free
+2. **Fix `carta.txt`.** It contains `adverti` for `advertí`. H0 requires corpus B to be free
    of the author's own typos, because a system that correctly spots one is scored as having
    overcorrected.
-4. **Then H5's manuscript machinery**: name glossary, global consistency pass, overlap at
+3. **Then H5's manuscript machinery**: name glossary, global consistency pass, overlap at
    the seams, final report.
-5. **Reconcile the `raced` units mismatch properly**, if the earlier report or its raw
+4. **Reconcile the `raced` units mismatch properly**, if the earlier report or its raw
    input/output token counts turn up — right now this document can say the old $0.171 does not
    reproduce from first principles, not why.
 
@@ -193,12 +195,17 @@ model reading text the rules had *not* yet cleared — a different, harder quest
 
 **About the model**
 
-- Deliberation is what buys recall. Four ways of avoiding it were measured and all four
-  failed: `reasoning_effort=none` (10× faster, finds less *and* overcorrects more), a
-  non-reasoning model (`corrector-haiku`, 5.6× faster, loses a quarter of the recall,
-  McNemar p = 2.4e-24), an off-taxonomy label as a filter (61 of 145 proposals off-schema,
-  only 5 of them false), and the model's own `confidence` (8 of 23 wrong edits came with
-  1.0). **The model does not know when it is wrong.**
+- Deliberation is what buys recall **on text the rule pack has not touched.** Four ways of
+  avoiding it were measured and all four failed: `reasoning_effort=none` (10× faster, finds
+  less *and* overcorrects more), a non-reasoning model (`corrector-haiku`, 5.6× faster, loses a
+  quarter of the recall, McNemar p = 2.4e-24), an off-taxonomy label as a filter (61 of 145
+  proposals off-schema, only 5 of them false), and the model's own `confidence` (8 of 23 wrong
+  edits came with 1.0). **The model does not know when it is wrong.** All four were measured on
+  raw text. A fifth, `corrector-bare` (`reasoning_effort=none` on `swept`'s rule-cleaned text,
+  2026-08-24), did not fail — F0.5 0.902 pooled over three draws, above `raced`'s own 0.860.
+  The qualifier matters: deliberation earns its keep judging spans that could be errors: once
+  the rule pack has removed the ones it can decide outright, there is measurably less for it to
+  earn.
 - `deepseek-v4-pro` is the same trade one notch along: 0.802 at 3.5 s, 0.950 at 53 s.
 - DeepSeek's context cache is automatic and input-side only, so it cannot touch a bill that
   is ~87% reasoning *output*.
@@ -208,8 +215,13 @@ model reading text the rules had *not* yet cleared — a different, harder quest
 - Chunking is in (H5). Splitting the blocks across calls **without context** is out: it
   costs 0.039 F0.5 and 10× the false positives.
 - Splitting them **with** context is in — that is `corrector-raced`.
-- At `reasoning_effort=none`, more context is *worse*: the whole document beside a window
-  scores P 0.756 against 0.935 for ±600 words.
+- At `reasoning_effort=none`, more context is *worse* — **on raw text.** The whole document
+  beside a window scores P 0.756 against 0.935 for ±600 words. On text `swept`'s rule pack has
+  already cleaned, whole-document `reasoning_effort=none` is `corrector-bare`, and it does not
+  reproduce this: P 0.914 pooled. Windowing costs its own price regardless
+  (`corrector-swift`/`corrector-fast`, refuted below the fold in "Where we are": 549 calls each
+  re-sending context costs more than a near-empty output saves), so this finding's practical
+  conclusion — do not window a no-reasoning pass — still holds; its causal story does not.
 - Gemini loses recall when windowed (0.971 → 0.657). Sonnet gained. The split is
   model-specific and travels with nobody.
 

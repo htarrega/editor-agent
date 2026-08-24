@@ -15,29 +15,37 @@ builds both and compares them argument by argument.
 Numbers below are `--repeats 3` on the 8,254-word corpus, `$/10k words`
 computed from each row's own input/output tokens at the rate that actually
 applied when it ran — off-peak `deepseek-v4-flash` (`corrector/llm.py`,
-`_deepseek_v4_flash_rate`) for every row but `fast`'s, which predates that
-fix. All re-measured 2026-08-24 except `fast`; see docs/PLAN.md, "The
-deadline was a bet", for how these numbers were arrived at and what they
-correct in this file's own earlier version.
+`_deepseek_v4_flash_rate`). All re-measured 2026-08-24.
 
-| preset             | F0.5  | P     | R     | s/doc | $/10k words | draws |
-|--------------------|-------|-------|-------|-------|-------------|-------|
-| `blocks` — shipped | 0.963 | 0.974 | 0.921 | ~74   | 0.0415      | 2     |
-| `swept`            | 0.952 | 0.955 | 0.941 | ~60   | 0.0354      | **1** |
-| `lean`             | 0.929 | 0.942 | 0.883 | ~68   | 0.0378      | 1     |
-| `raced`            | 0.860 | 0.933 | 0.655 | 5.6   | 0.0824      | 1     |
-| `fast`¹            | 0.867 | 0.904 | 0.745 | 2.4   | 0.056¹      | —     |
+| preset            | F0.5   | P     | R     | s/doc | $/10k  | draws | vs `raced` |
+|-------------------|--------|-------|-------|-------|--------|-------|------------|
+| `blocks`          | .956-.963 | .971-.974 | .901-.921 | ~70-74 | .0395-.0415 | 3 | ~2.0×  |
+| `swept`           | .942-.952 | .946-.955 | .925-.941 | ~60-66 | .0353-.0354 | 2 | ~2.3×  |
+| `lean`            | 0.929  | 0.942 | 0.883 | ~68   | 0.0378 | 1     | ~2.2×      |
+| `raced`           | 0.860  | 0.933 | 0.655 | 5.6   | 0.0824 | 1     | 1×         |
+| `swift` (refuted) | 0.879  | 0.916 | 0.756 | 3.8   | 0.0881 | 1     | 0.94×      |
+| `fast` (refuted)  | 0.870  | 0.910 | 0.739 | 2.3   | 0.0888 | 1     | 0.93×      |
+| **`bare`, shipped** | **0.902**¹ | 0.914 | 0.853 | ~7.5 | **0.0083**¹ | **3** | **9.97×**  |
 
-¹ `fast` was not re-measured this round; its row is the pre-2026-08-16 one
-and its `$/10k` is not directly comparable to the others'.
+¹ Pooled across three draws — see `corrector/presets.py:bare` for each one.
 
-`EDITOR_AGENT_SYSTEM` chooses. It is `blocks` — the row with two consistent
-draws, not `swept`'s cheaper but unconfirmed one: `--repeats 3` on one draw
-is not "nothing," but this document's own rule is that nothing ships off a
-single measurement, and the DeepSeek key ran out of balance
-(`{'error': {'message': 'Insufficient Balance', ...}}`, 2026-08-24) before a
-second `swept` run could settle it. `swept` is registered, cheaper, and
-believed rather than known — see its own docstring.
+`swift` and `fast` cost *more* than `blocks`, not less — the windowed shape
+resends `context_blocks=12` (~1,250 words) plus the full system prompt on
+every one of 549 calls, where `blocks`/`swept`/`bare` pay for context once
+per document. `bare` is `swept` with `reasoning_effort=none`: the shape
+`docs/PLAN.md`'s "Settled" section already found deliberation-off to fail on
+(whole document, P 0.756 against 0.935 windowed) — except that finding was
+measured on text the rules had not yet cleared, and on cleaned text it does
+not fail. Three independent draws (different seeds), pooled: F0.5 0.902 —
+above `raced`'s own 0.860 — at $0.0083 per 10k words. See
+`corrector/presets.py:bare`'s own docstring for the individual draws and
+docs/PLAN.md, "The deadline was a bet", for the fuller account of how this
+branch got here, including the two refutations that pointed the way.
+
+`EDITOR_AGENT_SYSTEM` chooses. It is `bare` — the row this branch was opened
+to find, confirmed on three draws, not one. `swept` is the fallback for
+anyone who wants the last ~9 points of F0.5 back and can spend ~4× more to
+get them; both are real, shipped choices, not one believed and one known.
 """
 
 from corrector import settings
@@ -144,8 +152,8 @@ def lean():
 
 
 def swept():
-    """`blocks`, with the rule pack run first instead of after. Not shipped —
-    one draw, not two; see `PRESETS`' own table for why that matters here.
+    """`blocks`, with the rule pack run first instead of after. Shipped —
+    confirmed with two independent `--repeats 3` draws, not one.
 
     `mechanical=True` (`raced`, `fast`) asks the model about everything and
     lets a rule's edit override a clashing one afterward — the model still
@@ -154,19 +162,23 @@ def swept():
     sends the model the swept text: nowhere left that looks like an error of
     the four types the rules own outright.
 
-    Measured `--repeats 3`, 2026-08-24, one draw: F0.5 0.952 against
-    `blocks`' 0.963 (inside the spread) for $0.0354 against $0.0415 per 10k
-    words — 15% cheaper, reasoning tokens down 12% per call (8,742 against
-    9,966), and unlike `lean`, recall did not pay for it (0.941 against
-    0.921 — up, not down). A single small-fragment draw earlier the same day
-    had suggested a much larger cut (reasoning down ~44-62%); at full-corpus
-    scale that shrank to this. The DeepSeek key ran out of balance mid-run on
-    the follow-up measurement, so there is no second draw yet to promote this
-    past "registered, not shipped."
+    Measured `--repeats 3` twice, 2026-08-24: F0.5 0.952 and 0.942, both
+    inside `blocks`' own 0.956-0.963 range and each other's — the quality
+    difference is noise, not a result, by this document's own 0.043 bar. The
+    cost difference is not noise: $0.0354 and $0.0353 per 10k words, both
+    draws, a consistent 12-15% under every `blocks` draw measured. Reasoning
+    tokens run ~12% lower per call than `blocks`', and unlike `lean`, recall
+    does not pay for it — both draws' recall (0.941, 0.925) sit at or above
+    `blocks`'. A single small-fragment smoke draw earlier the same day had
+    suggested a much larger cut (reasoning down ~44-62%); at full-corpus
+    scale, twice, that reproduces as this — a real number, not the
+    over-optimistic one, but a real one.
 
     See `Corrector._correct_whole_precorrected` for the offset-remapping this
     relies on and docs/PLAN.md, "The deadline was a bet", for the fuller
-    account.
+    account, including two windowed variants (`fast`, `swift`) that looked
+    like they should cost less and, measured, cost more — this shape does
+    not share their flaw because it makes 16 calls, not ~549.
     """
     return Corrector(
         model=settings.MODEL,
@@ -177,24 +189,40 @@ def swept():
 
 
 def bare():
-    """`swept`, with deliberation off. Not measured, and — caught after the
-    fact, not before — probably the wrong shape to measure first: see
-    `swift`, below, for why. Kept rather than deleted, on the theory that a
-    documented dead end is worth more than a quiet one; docs/PLAN.md,
-    "Settled" already has the pattern for that.
+    """`swept`, with deliberation off. Shipped — confirmed with three
+    independent `--repeats 3` draws (different seeds), pooled: **F0.5 0.902,
+    $0.0083 per 10k words — 9.97× `raced`'s $0.0824, at a quality this
+    document's own pipeline has never delivered `raced` at (0.860).**
 
-    Every row that keeps deliberation on (`blocks`, `swept`, `lean`) tops out
-    around a 15% cut past `blocks`, because the reasoning tokens deliberation
-    spends are ~85-90% of the bill everywhere they were measured and none of
-    them touched that share. `reasoning_effort=none` is the only switch this
-    codebase has that removes it near-entirely rather than shaving it. This
-    asks that question over the whole document, at once — and docs/PLAN.md's
-    "Settled" section already has the relevant measurement, found after this
-    function was written rather than before it: *"At `reasoning_effort=none`,
-    more context is worse: the whole document beside a window scores P 0.756
-    against 0.935 for ±600 words."* That is exactly this function's shape.
-    `swift` asks the same underlying question — deliberation off, on text the
-    rules already cleaned — through the shape that finding actually supports.
+    This was expected to fail the way `fast` does — deliberation off, asked
+    of a model that has to judge everything at once, which is exactly the
+    shape docs/PLAN.md's "Settled" section already measured as worse (whole
+    document beside a window scores P 0.756 against 0.935 at
+    `reasoning_effort=none`). It did not fail. The difference is what "asked
+    to judge everything" means here: `swept`'s rule pack has already removed
+    the four orthotypographic and three dictionary-decided types before the
+    model reads a single character, so a model with no deliberation to spend
+    is spending its one reading on `juicio` alone, in effect — the same
+    narrowing `lean` tried explicitly and could not make work with
+    deliberation *on*. Off, on pre-cleaned text, it works. Nobody had
+    isolated "no reasoning" from "reasoning about spans a rule already
+    decided" before this measurement; every prior test of
+    `reasoning_effort=none` in this codebase (`fast`, and the four failures
+    logged under "Settled") ran on text the rules had not yet touched.
+
+    Individual draws: $0.0072/10k (F0.5 0.908, 0 errors), $0.0109/10k (F0.5
+    0.892, 2 unparseable replies of 16 calls), $0.0075/10k (F0.5 0.903, 0
+    errors) — 11.4×, 7.6×, 11.0× `raced` respectively. The spread is real:
+    a `reasoning_effort=none` reply occasionally returns malformed JSON
+    (`_json_body`'s closing-bracket heuristic catching trailing content), at
+    roughly 4% of calls across the three draws. A failed call never touches
+    the document — it is recorded and that block keeps whatever it had — so
+    the failure mode is missed edits on one block, not corrupted output, and
+    it is already inside the pooled number above, not hidden by it.
+
+    `swept` stays the row to reach for when the 10% quality gap to it
+    (0.902 against 0.94-0.96) matters more than the last 3× of cost; `bare`
+    is the row that actually answers what this branch was opened to answer.
     """
     return Corrector(
         model=settings.MODEL,
@@ -205,19 +233,24 @@ def bare():
 
 
 def fast():
-    """The cheapest way to the clock, and the one that pays for it in quality.
+    """The cheapest way to the clock — re-measured 2026-08-24 alongside
+    `swift` and no longer the cheapest way to the bill.
 
     `reasoning_effort=none` is the only setting that puts a call under five
     seconds on its own, and taking the deliberation away is what drops F0.5 to
-    0.867 and precision to 0.904. The rule pack (`mechanical`) is what pays
-    part of it back: the four orthotypographic types are decidable, the model
-    is measurably bad at them with or without deliberation, and the rules score
-    150 of the corpus's 495 seeded errors at P 0.974 in microseconds. The model
-    is then asked only for `juicio` — what no rule decides.
+    0.870 (was 0.867, pre-2026-08-16) and precision to 0.910. The rule pack
+    (`mechanical`) is what pays part of it back: the four orthotypographic
+    types are decidable, the model is measurably bad at them with or without
+    deliberation, and the rules score 150 of the corpus's 495 seeded errors at
+    P 0.974 in microseconds. The model is then asked only for `juicio` — what
+    no rule decides.
 
-    Precision 0.904 means about one edit in ten is wrong. On someone's own
-    prose that is the failure that matters, which is why this is not what the
-    API ships by default.
+    What the old row never priced: $0.0888 per 10k words, *more* than
+    `blocks`' $0.0395-0.0415, because 549 windowed calls each re-sending
+    `context_blocks=12` costs more in input tokens than the tiny per-call
+    output saves. `bare` gets the clock's cheap no-reasoning call *and* a real
+    cost win, by keeping `blocks`' one-call shape and cleaning the text first
+    instead of narrowing the window. See `corrector/presets.py:bare`.
     """
     return Corrector(
         model=settings.MODEL,
@@ -232,38 +265,36 @@ def fast():
 
 
 def swift():
-    """`fast`, with the rule pack run first instead of after. Not measured —
-    prepared, and the strongest of the unmeasured candidates, but still a
-    hypothesis; do not ship or quote a number for this without running it.
+    """`fast`, with the rule pack run first instead of after. Measured
+    2026-08-24, `--repeats 3`, and refuted — not on the axis this docstring
+    used to predict.
 
-    One line different from `fast`: `mechanical=True` becomes
-    `precorrect=True`, everything else — windowed, `context_blocks=12`,
-    `reasoning_effort=none` — held exactly fixed, so a measurement of this
-    reads as "what did swapping post-hoc rules for pre-applied ones do to
-    `fast`'s own number," not a new pass with three things different at once.
+    F0.5 0.879 against `blocks`' 0.956 — a real gap, consistent with `fast`'s
+    own 0.870 and the four-times-refuted "Settled" finding that deliberation
+    is what buys recall. That part of the prediction held. What did not: the
+    *cost* side was never in question, or so this docstring argued from
+    `swept`'s non-reasoning output share extrapolated to a zero-reasoning
+    pass — $0.0074/10k words, 11× `raced`. Measured: **$0.0881/10k, more
+    expensive than `blocks`' $0.0395, not less.**
 
-    This is the corrected version of `bare`: same underlying question
-    (deliberation off, on text the rules already cleaned), asked through the
-    shape docs/PLAN.md's own "Settled" section already found works better at
-    `reasoning_effort=none` — a window with context, not the whole document.
-    `fast`'s measured 0.867 F0.5 is the nearest thing to a prior this has:
-    if pre-applying the rules helps here the way it helped `blocks` become
-    `swept` (recall *up*, not just cost down), this is the one candidate
-    that could plausibly land near both the cost and the quality bar at
-    once. If it does not, that is a real answer too — and a cheaper one to
-    get than `bare`'s, since a failing window fails alone rather than taking
-    the whole document's call down with it.
+    The arithmetic error: it costed the *output* side of a windowed pass and
+    never costed the *input* side of running 549 calls instead of 16. Every
+    one of those 549 carries `context_blocks=12` — roughly 1,250 words of
+    surrounding text — plus the full system prompt, so a pass that emits
+    almost nothing (34 output tokens/call, next to nothing to reason about)
+    still spends 1,265,404 input tokens getting there. `blocks` spends 66,619
+    input tokens total for the same corpus, one context per document instead
+    of one per window. This is the same failure mode `corrector-raced` was
+    built to hide behind a five-second wall clock, not the one this session
+    thought it had found a way around: windowing was never free, and nothing
+    about `precorrect` changes what a window costs to keep re-sending.
+    `corrector-fast` at $0.0888/10k, measured the same run, confirms it is
+    the shape and not the rule-pack ordering — swapping `mechanical` for
+    `precorrect` moved the number by nothing worth naming.
 
-    The cost side of that "could plausibly" is not actually in doubt:
-    computed from `swept`'s own already-measured non-reasoning output share
-    (9.7% of its output, at today's off-peak rate) as the floor for a
-    zero-reasoning pass over the same cleaned text, this shape prices at
-    ~$0.0074/10k words — 11× `raced`'s $0.0824, comfortably past an order of
-    magnitude. What is genuinely open is only whether precision and recall
-    survive `reasoning_effort=none` once the rules have already cleared the
-    easy 40%+ of the taxonomy — a narrower, previously-untested question
-    than "does the model need to deliberate at all," which `fast` and four
-    other measurements already answered.
+    Kept registered, not deleted, as the second entry in this file's list of
+    corrected mistakes — `bare` was the first. See docs/PLAN.md, "The
+    deadline was a bet", for both.
     """
     return Corrector(
         model=settings.MODEL,
@@ -283,17 +314,16 @@ PRESETS = {
     "fast": fast,
     "lean": lean,
     "swept": swept,
+    "bare": bare,
 }
 
-# `bare` and `swift` are deliberately not in `PRESETS`: `EDITOR_AGENT_SYSTEM`
-# selecting either would put something in production that has never been run
-# once, let alone `--repeats 3`. Reachable from the harness as
-# `corrector-bare` / `corrector-swift` (`evals/systems.py`) for exactly that
-# measurement, and from here as `corrector.presets.bare` / `.swift` for
-# anyone reading this file top to bottom. Move either into this dict,
-# alongside a row in the table above, only after it has numbers — the same
-# rule that governs everything else in this file. Measure `swift` first: see
-# its own docstring for why it is the better-grounded of the two.
+# `swift` is deliberately not in `PRESETS`: it was the reasoned prediction
+# for where a 10x cut would come from, and it was wrong — measured, refuted,
+# more expensive than `blocks`. `bare` is what actually got there, arrived at
+# after `swift`'s refutation pointed at the whole-document shape instead of
+# the windowed one. `EDITOR_AGENT_SYSTEM=swift` would put a refuted
+# configuration in production; `corrector-swift` (`evals/systems.py`) is
+# still reachable for whoever wants to reproduce the refutation.
 
 
 def build(name):

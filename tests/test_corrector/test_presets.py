@@ -64,16 +64,13 @@ class PresetsMatchTheScoredRows(unittest.TestCase):
         self.assert_same("swept", "corrector-swept")
 
     def test_bare_is_corrector_bare(self):
-        # Not reached through presets.build: `bare` is deliberately outside
-        # PRESETS (see Build.test_neither_unmeasured_preset_is_shippable), so
-        # this calls the function directly rather than through the name
-        # lookup every other row in this class uses.
-        bare = presets.bare()
-        row = BUILDERS["corrector-bare"]().corrector
-        self.assertEqual(shape(bare), shape(row), "bare has drifted from corrector-bare")
-        self.assertEqual(bare.prompt, row.prompt)
+        self.assert_same("bare", "corrector-bare")
 
     def test_swift_is_corrector_swift(self):
+        # Not reached through presets.build: `swift` is deliberately outside
+        # PRESETS (see Build.test_swift_is_not_a_shippable_preset — it is the
+        # refuted prediction `bare` replaced), so this calls the function
+        # directly rather than through the name lookup every shipped row uses.
         swift = presets.swift()
         row = BUILDERS["corrector-swift"]().corrector
         self.assertEqual(shape(swift), shape(row), "swift has drifted from corrector-swift")
@@ -98,13 +95,12 @@ class Build(unittest.TestCase):
 
         self.assertIn(settings.SYSTEM, presets.PRESETS)
 
-    def test_neither_unmeasured_preset_is_shippable(self):
-        # Defined and buildable (they have to be, to measure them) but kept
-        # out of PRESETS: EDITOR_AGENT_SYSTEM must not be able to select
-        # something that has never been run once, let alone --repeats 3.
-        self.assertNotIn("bare", presets.PRESETS)
+    def test_swift_is_not_a_shippable_preset(self):
+        # Defined and buildable (it has to be, to measure it) but kept out of
+        # PRESETS: it is the refuted prediction, and EDITOR_AGENT_SYSTEM=swift
+        # must not be able to select a configuration measured to cost more
+        # than the one it was meant to beat.
         self.assertNotIn("swift", presets.PRESETS)
-        self.assertIsNotNone(presets.bare())
         self.assertIsNotNone(presets.swift())
 
 
