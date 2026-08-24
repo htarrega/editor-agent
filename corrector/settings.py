@@ -80,3 +80,19 @@ MAX_WORDS = int(
         "2000",
     )
 )
+
+# Where the Google Docs integration keeps its two files (`corrector/drive.py`).
+#
+# The client secrets are the OAuth application — downloaded once from Google
+# Cloud Console, type «Desktop app». The token is the author's consent to it,
+# written after the first `python -m corrector.drive login` and refreshed from
+# then on. Neither belongs in the repository, so both default outside it.
+GOOGLE_CLIENT_SECRETS = os.environ.get(
+    "EDITOR_AGENT_GOOGLE_CLIENT_SECRETS",
+    "~/.config/editor-agent/client_secret.json",
+)
+
+GOOGLE_TOKEN = os.environ.get(
+    "EDITOR_AGENT_GOOGLE_TOKEN",
+    "~/.config/editor-agent/token.json",
+)

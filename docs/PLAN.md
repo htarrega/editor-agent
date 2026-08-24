@@ -35,6 +35,11 @@ below and `corrector/presets.py:bare` for each one.
 ² Measured on a **different corpus** — see the warning in H0.
 ³ Pre-2026-08-16 DeepSeek rate; not directly comparable to the rows above it.
 
+**H6's backend is built, in the working tree, not yet committed** — a Doc corrected in place,
+its formatting intact, reachable at `POST /api/drive/jobs`. Unverified against a real document,
+and the trigger surface (what on the browser side fires a correction) is deliberately still
+open — see H6.
+
 **The deadline was a bet, and 2026-08-24 is the day it did not pay.** `raced`'s whole case
 was under-five-seconds without giving up the deliberation, bought with redundancy: three
 deliberated tickets racing a `hurried` no-reasoning floor, first answer wins. That case was
@@ -47,10 +52,10 @@ more blocks fell back to the cheap `hurried` answer, which finds less by design.
 `corrector-blocks` was re-measured the same day, same corpus, no hard deadline to miss:
 F0.5 0.963. The comparison *between* `blocks` and `raced` on one day holds regardless of what
 either number would have read on a different day: `blocks` is both better and roughly half
-`raced`'s cost ($0.0415 against $0.0824 per 10k words), which is not a trade, and
-`EDITOR_AGENT_SYSTEM` now defaults to it. `raced` stays registered, out of `DEFAULT_SYSTEMS`,
-for whoever still wants the clock and can accept that its quality is a bet on the hour rather
-than a number.
+`raced`'s cost ($0.0415 against $0.0824 per 10k words), which is not a trade, and `blocks`
+became what shipped (later superseded by `swept`, then `bare` — see below). `raced` stays
+registered, out of `DEFAULT_SYSTEMS`, for whoever still wants the clock and can accept that its
+quality is a bet on the hour rather than a number.
 
 **Two bugs, found chasing this, neither about which system is faster.**
 
@@ -98,8 +103,10 @@ against that swept text and are translated back to the caller's original offsets
 that lands inside a rule's own replacement. Confirmed on two independent `--repeats 3` draws:
 F0.5 0.952 and 0.942, both inside `blocks`' own range and each other's, at $0.0354 and $0.0353
 per 10k words — a consistent ~12-15% under `blocks`, with recall at or above it both times
-(0.941, 0.925). Registered and shippable (`EDITOR_AGENT_SYSTEM=swept`), and the fallback for
-anyone who wants more quality margin than `bare` (below) gives up.
+(0.941, 0.925). Registered in `corrector/presets.py` and reachable from the harness as
+`corrector-swept`; not reachable from the running API (see "`EDITOR_AGENT_SYSTEM` is gone"
+below), but the documented choice for anyone who wants more quality margin than `bare` gives
+up, if `corrector/settings.py:SYSTEM` is ever changed to it.
 
 **Put a paid key behind Gemini — done, and it settles the question rather than opening it
 further.** The free-tier draws that used to sit in this table (F0.5 0.994, one fragment, one
@@ -151,8 +158,9 @@ cost. The one real cost of shipping it: `reasoning_effort=none` occasionally ret
 JSON (`_json_body`'s closing-bracket heuristic catching trailing content after the object), at
 roughly 4% of calls across the three draws. `Corrector` already treats a failed call as a
 missed block, never a corrupted one, and that failure mode is inside the pooled number above,
-not hidden by it — `EDITOR_AGENT_SYSTEM` ships it anyway, and `swept` (higher quality, ~4× the
-cost, no observed parse failures) is the documented fallback for whoever wants the margin back.
+not hidden by it — `corrector/settings.py:SYSTEM` ships it anyway, and `swept` (higher quality,
+~4× the cost, no observed parse failures) is the documented fallback for whoever wants the
+margin back.
 
 **What the harness measures did not move with any of this.** `corrector-blocks` is still the
 row in `DEFAULT_SYSTEMS` and the best F0.5 measured with more than one draw; `corrector-bare`
@@ -171,21 +179,27 @@ deploying a new build — a commit, not an env var flip — which is the point.
 
 ### What to do next
 
-0. **Watch `corrector-bare`'s parse-failure rate in production.** ~4% of calls across the three
+0. **Close H6's round trip.** Drive is built but nothing has run against a real Doc: the
+   arithmetic is pinned against literal payloads, the round trip is not. Finish the Cloud
+   Console setup (README, «Google Docs» — and set the app **In production**, or the token
+   expires weekly), then `python -m corrector.drive <url>`. After that, the open question is
+   which surface fires a correction: H6's «The trigger» lays out a front tab, a Chrome
+   extension and an Apps Script add-on with what each costs.
+1. **Watch `corrector-bare`'s parse-failure rate in production.** ~4% of calls across the three
    confirming draws came back malformed under `reasoning_effort=none`; the pipeline already
    degrades safely (a missed block, never a corrupted one) but a tighter number than "one draw
    in three saw 2 of 16" would say whether that rate holds, and whether `_json_body`'s
    closing-bracket heuristic (`corrector/correct.py`) is worth hardening against trailing
    content specifically, rather than generally.
-1. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
+2. **Re-measure `naive-claude` on the current corpus** (`--repeats 3`, ~$1.32 at today's
    Claude rate — not re-verified this round either). The baseline this document quotes
    throughout has never run on it.
-2. **Fix `carta.txt`.** It contains `adverti` for `advertí`. H0 requires corpus B to be free
+3. **Fix `carta.txt`.** It contains `adverti` for `advertí`. H0 requires corpus B to be free
    of the author's own typos, because a system that correctly spots one is scored as having
    overcorrected.
-3. **Then H5's manuscript machinery**: name glossary, global consistency pass, overlap at
+4. **Then H5's manuscript machinery**: name glossary, global consistency pass, overlap at
    the seams, final report.
-4. **Reconcile the `raced` units mismatch properly**, if the earlier report or its raw
+5. **Reconcile the `raced` units mismatch properly**, if the earlier report or its raw
    input/output token counts turn up — right now this document can say the old $0.171 does not
    reproduce from first principles, not why.
 
@@ -193,7 +207,7 @@ deploying a new build — a commit, not an env var flip — which is the point.
 
 - Anthropic is ruled out and the balance is spent. Before that, windowed `claude-sonnet-5`
   measured F0.5 0.994 at 11 s on one fragment.
-- Nothing authenticates or rate-limits `POST /jobs`, and every call spends money. The
+- Nothing authenticates or rate-limits `POST /api/jobs`, and every call spends money. The
   endpoint stays on `127.0.0.1` until a shared secret, a proxy or accounts is chosen.
 - H5 asks for a 30–50k-word text and the corpus holds 8,254. Either a real manuscript goes
   into `evals/corpus/`, or the bar changes to something the harness can score.
@@ -640,10 +654,101 @@ prompt rather than a second pass.
 - **Done when**: stylometric distance original↔corrected drops against `corrector-blocks` and
   dialogue with deliberate traits survives intact — over `--repeats 3`.
 
-## H6 — Google Drive
+## H6 — Google Drive — **backend built, unverified against a real document**
 
-Read a document from Drive, write back the corrected version and the report.
-**Done when**: a full cycle from a real Doc of the author's.
+`corrector/drive.py` reads a Doc, corrects it and writes the corrections back **in place**.
+`api/service.py`'s `submit_drive_job` takes the document's URL and answers with the same job
+id as any other submission — `POST /api/drive/jobs` on the JSON side; there is no HTML tab for
+it yet (see «The trigger» below).
+
+**The formatting is kept by not touching it.** No export, no re-upload: the pipeline's
+anchored edits are resolved to the document's own indices and applied as
+`insertText` + `deleteContentRange`, so only corrected words are ever named in a request.
+Two invariants make that hold rather than merely usually work, and both are pinned by
+`tests/test_corrector/test_drive.py`:
+
+- **Nothing structural is deleted.** An edit whose span or replacement contains a newline is
+  dropped: a newline *is* the paragraph, and merging two loses one of their styles. Same for
+  an edit reaching across an image or a chip, which extraction skipped and which the edit
+  would therefore delete.
+- **The revision is pinned.** The write carries the `revisionId` that was read, so a document
+  the author kept typing into fails instead of applying corrections at indices that moved.
+
+The job's `text` is built from the edits Drive *accepted*, so a client can never be shown a
+correction the document does not have.
+
+The Google libraries are the `drive` extra; without them the endpoint answers `501` with the
+install line and the rest of the API is unaffected.
+
+**Not done when**: nobody has run it against a real Doc of the author's. Everything above is
+tested against literal document payloads and a fake service — the arithmetic is pinned, the
+round trip is not. `python -m corrector.drive <url>` is the one command that settles it.
+
+**One-time setup, and it cannot be automated away.** Google has never implemented dynamic
+client registration (RFC 7591), so the OAuth client is made by hand in Cloud Console once —
+see the README. Two traps live there rather than in code: the app must be **In production**
+or Google expires the refresh token every seven days, and enabling the Docs API needs a
+project whichever route is taken (ADC via `gcloud` skips the JSON download, not the Console).
+
+**Scope.** The body of the first tab. Tables, footnotes, headers and footers are not read,
+and a document over `EDITOR_AGENT_MAX_WORDS` is refused with a `413` — a manuscript needs
+H5's chunking first.
+
+### The trigger — fully open
+
+`POST /api/drive/jobs` exists; nothing browser-side calls it yet. The HTMX front that replaced
+the old React one (see «A browser front, server-rendered» under Interfaces) has no Drive tab —
+none was built for it, so this is not a regression, just unstarted work. Three ways to fire a
+correction on a real Doc, none of them built:
+
+The choice to make is «the selection if there is one, otherwise the whole document». Only the
+second half is reachable by any of them; which half stays unreachable is what separates the
+options:
+
+| | shortcut inside the Doc | selection | reaches `127.0.0.1` | own OAuth |
+|---|---|---|---|---|
+| **HTMX tab** — cheapest to build | no, only on the front's own page | no | yes | no |
+| **Chrome extension** | **yes** (`chrome.commands`) | no | yes | no |
+| **Apps Script add-on** | no | **yes** | **no** | no |
+
+**HTMX tab — the cheapest, and what H6's backend was built to sit behind.** A `POST` field for
+a Doc URL alongside the existing text/upload paths, same `hx-post="/jobs"`-style flow the rest
+of the front already uses. No new infrastructure, no new OAuth — the backend already holds the
+credentials.
+
+**Chrome extension — the recommendation if a keyboard trigger from inside the Doc matters.**
+~60 lines: a `manifest.json` with `commands` and `host_permissions`, a service worker that reads
+the active tab's URL, posts to `127.0.0.1:8000/api/drive/jobs`, polls, and raises a
+notification. Loaded unpacked; no Web Store, and no OAuth of its own because the backend
+already holds the credentials.
+
+- *For*: the only option with a real keyboard shortcut **while reading the Doc**. No URL to
+  paste — the doc id comes from the tab. It runs in the browser, so it reaches `127.0.0.1` and
+  the backend stays local.
+- *Against*: no selection. Google Docs has rendered its text to a `<canvas>` since 2021, so a
+  content script cannot read what is selected — `window.getSelection()` returns nothing.
+  Chrome only.
+
+**Apps Script add-on — the only route to the selection, and the expensive one.**
+`DocumentApp.getActiveDocument().getSelection()` is the sole API that sees what the author
+marked, and an add-on is the only thing that can call it.
+
+- *For*: the selection, and nothing else offers it.
+- *Against*: **Apps Script runs on Google's servers, not the author's machine**, so
+  `UrlFetchApp` cannot reach `127.0.0.1`. Taking this route means exposing the backend
+  through a tunnel, which means first settling the item parked under «Blocked on the author»:
+  nothing authenticates or rate-limits the endpoints and every call spends money. That is an
+  infrastructure decision and a bill, bought for one feature. Also no shortcut — Docs grants
+  add-ons a menu item and nothing more (macros with keyboard shortcuts are Sheets-only), so
+  it trades the shortcut away to buy the selection.
+
+**What would flip the recommendation**: correcting only the selected paragraph mattering more
+than everything else. Then it is Apps Script, and the first task is not the integration but a
+shared secret on the endpoint.
+
+**What none of them changes**: whole-document correction still stops at
+`EDITOR_AGENT_MAX_WORDS`, and the text/upload path on the front stays regardless — it is what
+handles pasted text and uploaded files, which no Doc-bound surface covers.
 
 ---
 
@@ -655,6 +760,10 @@ answers them as JSON at `/api` (`POST /api/jobs`, `202` and a job id out; `GET /
 `GET /api/health`), and `api/web.py` answers the same two operations as HTML at the bare paths
 for the browser. A default pass runs 60–90 s and a blocking POST that long trips proxy
 timeouts and, from a browser, looks like a dead server.
+
+`submit_drive_job` is the third submission next to `submit_job`: a Google Doc by URL instead of
+text in the body, answered as the same job shape, polled the same way — `POST /api/drive/jobs`
+on the JSON side, no HTML surface for it yet. See H6.
 
 A job whose every call failed ends `failed` with the reason in `detail`, because completing
 with the original text reads as "this text is clean". A job that lost only some of its calls

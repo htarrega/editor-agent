@@ -10,6 +10,14 @@ The content travels in the body. There is no endpoint that takes a path —
 `POST /correct-file` was removed rather than patched, because it read any file
 the process could read, and `tests/test_api/test_main.py` pins its absence.
 
+`POST /drive/jobs` is the one submission that does not carry its content, and
+it is not a hole of that shape: it names a Google Doc by URL, and what it can
+reach is bounded by the author's own OAuth consent rather than by whatever the
+process happens to have read access to. It answers with the same job id, polled
+at the same `GET /jobs/{job_id}`. What differs is the ending — the corrections
+are written back into the document in place, keeping its formatting, instead of
+being handed back as text. See `corrector/drive.py`.
+
 Nothing here authenticates or rate-limits, and every submission spends money at
 a provider. Keep it on `127.0.0.1` until that is settled.
 """
@@ -21,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api.jobs import Job
-from api.service import SubmissionError, get_corrector, get_job, submit_job
+from api.service import SubmissionError, get_corrector, get_job, submit_drive_job, submit_job
 from api.web import WEB
 from corrector.correct import Corrector
 
@@ -65,6 +73,22 @@ def submit(request: JobRequest, corrector: Corrector = Depends(get_corrector)):
     """
     try:
         return submit_job(request.text, corrector)
+    except SubmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+class DriveRequest(BaseModel):
+    document: str = Field(description="URL del documento de Google Docs, o su identificador")
+
+
+@ROUTER.post("/drive/jobs", status_code=202, response_model=JobCreated)
+def submit_drive(request: DriveRequest, corrector: Corrector = Depends(get_corrector)):
+    """Validate, create and enqueue via `api.service.submit_drive_job` — see
+    there for what makes a submission valid. This only translates a rejection
+    into the status code the JSON contract has always answered with.
+    """
+    try:
+        return submit_drive_job(request.document, corrector)
     except SubmissionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

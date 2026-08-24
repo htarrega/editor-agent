@@ -1,8 +1,8 @@
 # editor-agent
 
 An autonomous corrector for literary Spanish: it finds the errors in a manuscript and fixes
-them without rewriting the prose. A pipeline, a harness that scores it, an HTTP API and a
-browser front.
+them without rewriting the prose. A pipeline, a harness that scores it, an HTTP API, a
+browser front, and a Google Doc corrected in place with its formatting intact.
 
 - Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Milestones and state: [`docs/PLAN.md`](docs/PLAN.md) — start at «Where we are»
@@ -142,6 +142,7 @@ curl localhost:8000/api/jobs/<job_id>
 | | |
 |---|---|
 | `POST /api/jobs` | `{"text": ...}` in, a job id out. `400` if empty, `413` over `EDITOR_AGENT_MAX_WORDS` |
+| `POST /api/drive/jobs` | `{"document": <URL o id>}` in, the same job id out — see [Google Docs](#google-docs) |
 | `GET /api/jobs/{id}` | `status`, and on completion `text`, `applied`, `proposed`, `skipped`, `changes`, `errors`, `detail` |
 | `GET /api/health` | answers without building a corrector or reaching a provider |
 
@@ -159,6 +160,60 @@ touched, so a one-letter fix reads as the word it landed in rather than a lone c
 
 The 2,000-word ceiling is measured, not policy — there is no document-level pass yet
 (`docs/PLAN.md`, H5), so above it the pipeline runs where nobody has scored it.
+
+## Google Docs
+
+A Doc is corrected **in place**. It is never exported, corrected and uploaded back — that
+round trip is what flattens a manuscript. The pipeline's anchored edits are resolved to the
+document's own indices and applied as `insertText` + `deleteContentRange`, so only corrected
+words are ever named in a request and bold, italics, indents, paragraph styles and images
+survive because nothing rewrote them.
+
+```bash
+pip install -e ".[drive]"        # google-api-python-client, google-auth-oauthlib
+python -m corrector.drive login  # once, on the host: opens a browser, stores a token
+
+python -m corrector.drive https://docs.google.com/document/d/<id>/edit   # the whole cycle
+```
+
+`login` is an interactive consent flow, so it happens on a machine with a browser — never
+inside a container. The token it writes is what gets carried anywhere else, and it has to
+stay writable: refreshing rewrites it.
+
+There is no browser tab for this yet — `POST /api/drive/jobs` is the only way in for now.
+What should trigger a correction on a real Doc (a tab on this front, a Chrome extension, an
+Apps Script add-on) is still open; see `docs/PLAN.md`, H6, «The trigger».
+
+Two guards make the in-place claim hold rather than merely hope for it, both pinned by
+`tests/test_corrector/test_drive.py`. An edit whose span or replacement contains a newline is
+dropped: in Docs a newline *is* the paragraph, and deleting one merges two and loses a
+paragraph style. And the write pins the `revisionId` that was read, so a document the author
+kept typing into fails instead of applying corrections at indices that have moved.
+
+Setup is one OAuth client, once, and it cannot be skipped: Google does not implement dynamic
+client registration, so there is no way to mint one from code. In
+[Google Cloud Console](https://console.cloud.google.com/), on one project: enable the Docs
+API, configure the consent screen as **External** and add yourself under **Test users**, then
+create an OAuth client ID of type **Desktop app** and save the JSON as
+`~/.config/editor-agent/client_secret.json` (`EDITOR_AGENT_GOOGLE_CLIENT_SECRETS` and
+`EDITOR_AGENT_GOOGLE_TOKEN` move it).
+
+**Set the app to «In production» while you are there.** The Docs scope is a sensitive one, and
+Google expires the refresh token of an app left in *Testing* after seven days — meaning
+`login` again every week. In production it stops expiring; the app is still unverified, so
+consent shows a warning screen you click through, which for your own client is the point.
+
+In a host install without the extra the endpoint answers `501` with the install line, and the
+rest of the API is unaffected; the container image installs it.
+
+The job's `text` is what the document says afterwards, built only from the edits Drive
+accepted, so the API cannot report a correction the document does not have. Scope is the
+body of the first tab: tables, footnotes, headers and footers are not read, and so are never
+corrected.
+
+**Not verified against a real document yet** — everything above is tested against literal
+document payloads and a fake service (`tests/test_corrector/test_drive.py`); the arithmetic
+is pinned, the round trip is not. `python -m corrector.drive <url>` is what settles it.
 
 ## Front
 
@@ -195,8 +250,27 @@ docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
 |---|---|
 | `DEEPSEEK_API_KEY` | required; nothing corrects without it |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
+| `EDITOR_AGENT_GOOGLE_CLIENT_SECRETS` | the OAuth client JSON — see [Google Docs](#google-docs) |
+| `EDITOR_AGENT_GOOGLE_TOKEN` | the author's token; mount it **writable**, refreshing rewrites it — and see [Google Docs](#google-docs), because a writable mount does not save a token Google expired on its own |
 
 `/api/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.
+
+**Google Docs needs one extra thing in a container**, and it does not happen by itself. The
+image installs the `drive` extra, so the endpoint works rather than answering `501`. What the
+image cannot carry is the consent: `python -m corrector.drive login` is interactive and cannot
+run inside a container, so the token is minted on the host and mounted in. Both defaults
+resolve to the image's own home (`/home/amanuense/.config/editor-agent/`), where nothing put
+them, and without a token the endpoint answers `401` naming the command to run:
+
+```bash
+docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... \
+  -v ~/.config/editor-agent:/config \
+  -e EDITOR_AGENT_GOOGLE_CLIENT_SECRETS=/config/client_secret.json \
+  -e EDITOR_AGENT_GOOGLE_TOKEN=/config/token.json \
+  editor-agent
+```
+
+Not `:ro`. The mount works read-only right up until the access token expires, and then stops.
 
 Two things to settle before it faces anyone but you:
 
@@ -210,7 +284,7 @@ Two things to settle before it faces anyone but you:
 Without a container it is the same one piece by hand:
 
 ```bash
-pip install .
+pip install .                 # or `pip install ".[drive]"` to include Google Docs
 uvicorn api.main:app --host 0.0.0.0
 ```
 

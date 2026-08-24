@@ -40,6 +40,18 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["ruff==0.16.3"]
 
+# Google Docs, and only for those who want it. Three libraries and their
+# transitive dependencies are a lot to install on a clone that will only ever
+# post text to the API, and `corrector/drive.py` imports them inside the
+# functions that call Google so that importing the module — which `api/main.py`
+# does unconditionally — never depends on them being there. Without the extra
+# the endpoint answers 501 with the install line in it, and everything else in
+# the API works exactly as before.
+drive = [
+    "google-api-python-client==2.199.0",
+    "google-auth-oauthlib==1.4.0",
+]
+
 [tool.setuptools]
 # Listed rather than auto-discovered: `tests/` is not a package to install, and
 # flat-layout discovery would either pick it up or refuse to guess.

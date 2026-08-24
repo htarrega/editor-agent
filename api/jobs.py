@@ -54,11 +54,17 @@ class Job(BaseModel):
     same count `applied` gives as a number, spelled out one correction at a
     time. It stays empty until the job completes, and stays empty on a text
     that needed no correcting at all.
+
+    `document_id` and `title` are set only for a job that came from Drive, and
+    say which document the corrections were written into. For a job submitted
+    as text there is no document, and they stay `None`.
     """
 
     job_id: str
     status: Status
     words: int
+    document_id: str | None = None
+    title: str | None = None
     text: str | None = None
     proposed: int = 0
     applied: int = 0
@@ -84,8 +90,8 @@ class JobStore:
         self._lock = threading.Lock()
         self._capacity = capacity
 
-    def create(self, words):
-        job = Job(job_id=uuid.uuid4().hex, status="running", words=words)
+    def create(self, words, **fields):
+        job = Job(job_id=uuid.uuid4().hex, status="running", words=words, **fields)
         with self._lock:
             self._jobs[job.job_id] = job
             self._evict()

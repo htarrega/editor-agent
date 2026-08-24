@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 from api.jobs import AppliedChange, Job, JobStore
-from corrector import presets, settings
+from corrector import drive, presets, settings
 from corrector.correct import Corrector
 from corrector.edits import apply_edits, partition_edits
 
@@ -97,6 +97,36 @@ def get_job(job_id: str) -> Job | None:
     return STORE.get(job_id)
 
 
+def submit_drive_job(reference: str, corrector: Corrector) -> Job:
+    """Validate a Google Doc reference, create and enqueue its correction.
+
+    The document is read *here*, in the request, rather than in the worker —
+    it costs one fast call, and it is what lets a reference that is not a
+    document, one the account cannot see, or one over the word ceiling come
+    back as an ordinary rejection instead of as a job id that turns into a
+    failure a second later. `drive.DriveError` is translated into the same
+    `SubmissionError` `submit_job` raises, so both surfaces handle a rejected
+    Drive submission exactly the way they already handle a rejected text one.
+    """
+    try:
+        document = drive.read(reference)
+    except drive.DriveError as error:
+        raise SubmissionError(error.status, str(error)) from error
+
+    words = len(document.text.split())
+
+    if words > settings.MAX_WORDS:
+        raise SubmissionError(
+            413,
+            f"«{document.title}» tiene {words} palabras y el máximo son "
+            f"{settings.MAX_WORDS}. Divídelo y corrige las partes por separado.",
+        )
+
+    job = STORE.create(words, document_id=document.document_id, title=document.title)
+    EXECUTOR.submit(run_drive, job.job_id, document, corrector)
+    return job
+
+
 def run(job_id, text, corrector):
     """One correction pass, from a worker thread, recorded in the store.
 
@@ -104,39 +134,12 @@ def run(job_id, text, corrector):
     gone, so an exception has nowhere to go but a thread's traceback, and the
     poller would sit on `running` forever. Every ending is written to the job.
     """
-    try:
-        correction = corrector.correct(text)
-    except Exception as exc:
-        # The pipeline records per-call failures rather than raising, so
-        # reaching here is a bug or a broken configuration, not a bad call.
-        STORE.fail(job_id, f"{type(exc).__name__}: {exc}")
+    correction = _correct(job_id, text, corrector)
+    if correction is None:
         return
 
-    # A pass whose every call failed must not read as "no errors found" — that
-    # is what an invalid key looked like before: a completed job, applied 0,
-    # and the text handed straight back. `correct` records one error per failed
-    # call and counts one call per attempt, so `errors == calls` is the whole
-    # pass failing, while anything less is per-block mode losing some blocks and
-    # keeping the rest. That is a partial result worth returning, with the
-    # failures still in the body rather than thrown away with it.
-    if correction.errors and len(correction.errors) == correction.usage.calls:
-        STORE.fail(
-            job_id,
-            "; ".join(correction.errors),
-            errors=correction.errors,
-            usage=correction.usage.model_dump(),
-        )
-        return
-
-    corrected_text, apply_rejections = apply_edits(
-        text,
-        correction.edits,
-    )
-
-    rejected = dict(correction.rejected)
-
-    for rejection in apply_rejections:
-        rejected[rejection.reason] = rejected.get(rejection.reason, 0) + 1
+    corrected_text, apply_rejections = apply_edits(text, correction.edits)
+    rejected = _tally(correction, apply_rejections)
 
     # The edits `apply_edits` actually kept, spelled out one at a time rather
     # than just counted. `partition_edits` is the same left-to-right decision
@@ -156,6 +159,98 @@ def run(job_id, text, corrector):
         errors=correction.errors,
         usage=correction.usage.model_dump(),
     )
+
+
+def run_drive(job_id, document, corrector):
+    """The same pass, written back into the Doc it came from.
+
+    The correction is identical — same pipeline, same edits. What differs is
+    where they land: `drive.plan` resolves them to the document's own indices
+    and `drive.write` applies them in place, so the formatting the author gave
+    the manuscript is never rewritten and never has to be reconstructed.
+
+    The text this job reports is built from the edits Drive *accepted*, not
+    from every edit the corrector proposed. An edit the document refused — one
+    spanning a paragraph break, or an image — has to be missing from both, or
+    the author would read here a correction their document does not have.
+    """
+    correction = _correct(job_id, document.text, corrector)
+    if correction is None:
+        return
+
+    try:
+        requests, accepted, rejections = drive.plan(document, correction.edits)
+        drive.write(document, requests)
+    except drive.DriveError as error:
+        # The document was read, the model was paid, and the write did not
+        # happen — most often because the author kept typing and the revision
+        # moved under it. Nothing was written, so this is a failure with the
+        # reason in it, not a completion with a text nobody's document holds.
+        STORE.fail(
+            job_id,
+            str(error),
+            proposed=correction.proposed,
+            errors=correction.errors,
+            usage=correction.usage.model_dump(),
+        )
+        return
+
+    corrected_text, _ = apply_edits(document.text, accepted)
+    rejected = _tally(correction, rejections)
+    changes = [_change(document.text, edit) for edit in accepted]
+
+    STORE.complete(
+        job_id,
+        text=corrected_text,
+        proposed=correction.proposed,
+        applied=len(accepted),
+        skipped=sum(rejected.values()),
+        rejected=rejected,
+        changes=changes,
+        errors=correction.errors,
+        usage=correction.usage.model_dump(),
+    )
+
+
+def _correct(job_id, text, corrector):
+    """One pass, or `None` having already written the job off as failed.
+
+    Shared by both submissions so that "the whole pass failed" cannot come to
+    mean one thing for a text in a request body and another for a Doc.
+    """
+    try:
+        correction = corrector.correct(text)
+    except Exception as exc:
+        # The pipeline records per-call failures rather than raising, so
+        # reaching here is a bug or a broken configuration, not a bad call.
+        STORE.fail(job_id, f"{type(exc).__name__}: {exc}")
+        return None
+
+    # A pass whose every call failed must not read as "no errors found" — that
+    # is what an invalid key looked like before: a completed job, applied 0,
+    # and the text handed straight back. `correct` records one error per failed
+    # call and counts one call per attempt, so `errors == calls` is the whole
+    # pass failing, while anything less is per-block mode losing some blocks and
+    # keeping the rest. That is a partial result worth returning, with the
+    # failures still in the body rather than thrown away with it.
+    if correction.errors and len(correction.errors) == correction.usage.calls:
+        STORE.fail(
+            job_id,
+            "; ".join(correction.errors),
+            errors=correction.errors,
+            usage=correction.usage.model_dump(),
+        )
+        return None
+
+    return correction
+
+
+def _tally(correction, rejections):
+    """Everything the pass discarded, by reason: the model's and the writer's."""
+    counted = dict(correction.rejected)
+    for rejection in rejections:
+        counted[rejection.reason] = counted.get(rejection.reason, 0) + 1
+    return counted
 
 
 _WORD_CHAR = re.compile(r"\w", re.UNICODE)
