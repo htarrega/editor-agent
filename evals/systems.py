@@ -562,8 +562,9 @@ BUILDERS = {
 #
 # `corrector-blocks` is the reference row — the shape every other row here is
 # measured against, and no longer what ships. `corrector-bare` is what ships
-# (`EDITOR_AGENT_SYSTEM`, `corrector/presets.py`): both stay in the default
-# set for the same reason `corrector-raced` did while it shipped and
+# (`corrector/settings.py:SYSTEM` — hardcoded, not an environment variable,
+# since 2026-08-24): both stay in the default set for the same reason
+# `corrector-raced` did while it shipped and
 # `corrector-blocks` was still only the reference — leaving the shipped one
 # out is how a deployment quietly stops being measured. `raced` itself
 # dropped out the way `fast` and `verified` already were: still registered,

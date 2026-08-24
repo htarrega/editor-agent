@@ -37,13 +37,17 @@ false positive.
 
 ## Modes
 
-`EDITOR_AGENT_SYSTEM` picks one of six, and an unknown name is an error rather than a fallback
-to the default. `$/10k words` is computed from each row's own input/output tokens at the rate
-that actually applied when it ran (`corrector/llm.py`); numbers below are 2026-08-24.
+The API runs `bare` — one configuration, chosen in `corrector/settings.py:SYSTEM`, and not an
+environment variable: unlike every other knob in that module, there is no `EDITOR_AGENT_SYSTEM`
+to flip it at deploy time. Six configurations exist in `corrector/presets.py`, each pinned to a
+row the harness has scored, but only `bare` is reachable through the running API; the rest are
+there to be measured and compared, through the harness, not selected in production. `$/10k
+words` below is computed from each row's own input/output tokens at the rate that actually
+applied when it ran (`corrector/llm.py`); numbers are 2026-08-24.
 
-| `EDITOR_AGENT_SYSTEM` | s/document | F0.5 | P | $/10k words | |
+| preset | s/document | F0.5 | P | $/10k words | |
 |---|---|---|---|---|---|
-| **`bare`** | ~7.5 | **0.902**¹ | 0.914 | **0.0083**¹ | **default; what the API ships; three draws, pooled** |
+| **`bare`** | ~7.5 | **0.902**¹ | 0.914 | **0.0083**¹ | **what the API ships; three draws, pooled** |
 | `blocks` | ~74 | 0.963 | 0.974 | 0.0415 | reference row; best F0.5 measured |
 | `swept` | ~60-66 | 0.942-0.952 | 0.946-0.955 | 0.0353-0.0354 | higher quality than `bare`, ~4× its cost |
 | `raced` | 5.6 | 0.860 | 0.933 | 0.0824 | no longer shipped — the deadline is a bet on the hour |
@@ -52,17 +56,16 @@ that actually applied when it ran (`corrector/llm.py`); numbers below are 2026-0
 
 ¹ Pooled across three draws (different seeds) — see `corrector/presets.py:bare`.
 
-`lean` also works with `EDITOR_AGENT_SYSTEM` but is not the default — refuted, cheaper for real
-recall lost — because nothing here becomes the default off less evidence than the row it would
-replace. `rules-only` — no model at all — sits under every row above at 0.789 F0.5, for 0.00 s
-and nothing.
+`lean` exists in the same file, refuted the same way — cheaper for real recall lost — and
+`rules-only` — no model at all — sits under every row above at 0.789 F0.5, for 0.00 s and
+nothing. Changing what the API runs means editing `corrector/settings.py:SYSTEM` and
+re-deploying, which is deliberate: a choice this consequential should leave a commit.
 
 ```bash
-uvicorn api.main:app                               # bare, the default
-EDITOR_AGENT_SYSTEM=swept uvicorn api.main:app      # higher quality, ~4x the cost
-EDITOR_AGENT_SYSTEM=blocks uvicorn api.main:app
+uvicorn api.main:app                               # bare, the only thing this runs
 
-# the rows above, re-measured. One document at a time, or s/document
+# the rows above, re-measured — not what the running API answers with, only
+# how the choice of SYSTEM was made. One document at a time, or s/document
 # measures queueing rather than the pass.
 python -m evals.run --systems corrector-bare,corrector-blocks,corrector-swept,rules-only \
        --repeats 3 --concurrency 1
@@ -191,7 +194,6 @@ docker run -p 127.0.0.1:8000:8000 -e DEEPSEEK_API_KEY=... editor-agent
 | variable | |
 |---|---|
 | `DEEPSEEK_API_KEY` | required; nothing corrects without it |
-| `EDITOR_AGENT_SYSTEM` | `bare` (default), `blocks`, `swept`, `raced`, `fast` or `lean` — see [Modes](#modes) |
 | `EDITOR_AGENT_MAX_WORDS` | the `413` ceiling, 2,000 by default |
 
 `/api/health` is the image's own `HEALTHCHECK` and the right readiness probe anywhere else.

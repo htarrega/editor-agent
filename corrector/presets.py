@@ -42,10 +42,15 @@ above `raced`'s own 0.860 — at $0.0083 per 10k words. See
 docs/PLAN.md, "The deadline was a bet", for the fuller account of how this
 branch got here, including the two refutations that pointed the way.
 
-`EDITOR_AGENT_SYSTEM` chooses. It is `bare` — the row this branch was opened
-to find, confirmed on three draws, not one. `swept` is the fallback for
-anyone who wants the last ~9 points of F0.5 back and can spend ~4× more to
-get them; both are real, shipped choices, not one believed and one known.
+`corrector/settings.py:SYSTEM` names the one that ships: `bare`, the row this
+branch was opened to find, confirmed on three draws, not one — and, since
+2026-08-24, not read from the environment. The API runs `bare` and nothing
+else; there is no `EDITOR_AGENT_SYSTEM` override anymore, on purpose (see
+`corrector/settings.py`'s own comment for why). Every row in this file stays
+reachable from the harness for measurement — `swept` is the one worth
+reaching for if a future decision wants the last ~9 points of F0.5 back at
+~4× the cost — but reaching the *API* means editing `SYSTEM` and deploying,
+not flipping a variable.
 """
 
 from corrector import settings
@@ -321,9 +326,11 @@ PRESETS = {
 # for where a 10x cut would come from, and it was wrong — measured, refuted,
 # more expensive than `blocks`. `bare` is what actually got there, arrived at
 # after `swift`'s refutation pointed at the whole-document shape instead of
-# the windowed one. `EDITOR_AGENT_SYSTEM=swift` would put a refuted
-# configuration in production; `corrector-swift` (`evals/systems.py`) is
-# still reachable for whoever wants to reproduce the refutation.
+# the windowed one. `build("swift")` raises, the same as any other name that
+# is not a real preset — a refuted configuration does not get a shortcut past
+# that just for having once been the leading guess. `corrector-swift`
+# (`evals/systems.py`) is still reachable from the harness for whoever wants
+# to reproduce the refutation.
 
 
 def build(name):

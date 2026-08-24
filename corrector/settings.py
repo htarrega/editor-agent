@@ -23,7 +23,9 @@ BLOCK_WORDS = int(
 
 # Which measured configuration the API runs. One of `corrector/presets.py`.
 #
-# `bare` — `swept`'s rule-pack-first text, `reasoning_effort=none`. Three
+# `bare`, and — a deliberate choice, not merely a default — the only one:
+# unlike every other name here, this is not read from the environment. The
+# API and any exterior deployment run `bare` and nothing else. Three
 # independent `--repeats 3` draws (different seeds), pooled: **F0.5 0.902 at
 # $0.0083 per 10k words — 9.97x `raced`'s $0.0824, at a quality `raced` has
 # never itself delivered (0.860).**
@@ -46,12 +48,15 @@ BLOCK_WORDS = int(
 # draws — one of three saw 2 of 16 calls return unparseable JSON, which
 # `Corrector` already treats as a missed block, not a corrupted one.
 #
-# `swept` stays registered and selectable (`EDITOR_AGENT_SYSTEM=swept`) for
-# whoever wants the last ~9 points of F0.5 back at roughly 4x the cost.
-SYSTEM = os.environ.get(
-    "EDITOR_AGENT_SYSTEM",
-    "bare",
-)
+# `swept`, `blocks` and the rest stay registered in `corrector/presets.py`
+# and reachable from the harness (`python -m evals.run --systems
+# corrector-swept`) for measurement and comparison — that door is deliberately
+# not closed. What is closed is running any of them from this API: there is
+# no environment variable that changes what a request here gets served by.
+# Whoever wants a different trade-off edits this line and re-deploys, which
+# is the point — a choice this consequential should leave a commit, not an
+# unreviewable env var flip in someone's deploy config.
+SYSTEM = "bare"
 
 # Where the built front lives, when the API is the thing serving it. A missing
 # directory means there is nothing to serve and the API is HTTP only, which is

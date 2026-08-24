@@ -160,6 +160,15 @@ joined it there because leaving the shipped row out is how a deployment quietly 
 measured. `corrector/presets.py` is where the shipped configuration lives, pinned against the
 harness's row by `tests/test_corrector/test_presets.py` so the two cannot drift.
 
+**`EDITOR_AGENT_SYSTEM` is gone.** Every other knob in `corrector/settings.py` still reads its
+own environment variable; `SYSTEM` no longer does — it is a literal, `"bare"`, and the API and
+any exterior deployment run it and nothing else, by explicit instruction rather than by default.
+The other rows above stay reachable from the harness for measurement and comparison; none of
+them is reachable from a request to the running API anymore, and there is no deploy-time flag
+that changes that. Changing what ships means editing `corrector/settings.py:SYSTEM` and
+deploying a new build — a commit, not an env var flip — which is the point.
+`tests/test_corrector/test_settings.py` pins that the environment variable has no effect.
+
 ### What to do next
 
 0. **Watch `corrector-bare`'s parse-failure rate in production.** ~4% of calls across the three

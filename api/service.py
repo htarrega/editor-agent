@@ -39,8 +39,12 @@ def get_corrector():
     reaches for a provider client. A FastAPI dependency rather than a
     module-level value so tests can override it with a fake `generate`.
 
-    Which configuration it is comes from `EDITOR_AGENT_SYSTEM`, and every
-    choice it offers is a row the harness has scored — see `corrector/presets.py`.
+    Which configuration it is comes from `corrector/settings.py:SYSTEM` — a
+    row the harness has scored, and, deliberately, not an environment
+    variable: this is the one knob in `corrector.settings` that is not read
+    from `os.environ`, so there is no deploy-time flip that changes what a
+    request here gets served by. See `corrector/presets.py` and
+    `corrector/settings.py`'s own comment on `SYSTEM` for why.
     """
     return presets.build(settings.SYSTEM)
 
